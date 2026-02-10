@@ -17,24 +17,31 @@
 
   <!-- Performance hints -->
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://apis.google.com" crossorigin />
+  <link rel="preconnect" href="https://accounts.google.com" crossorigin />
   <link rel="preconnect" href="https://script.google.com" crossorigin />
   <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin />
   <link rel="preconnect" href="https://docs.google.com" crossorigin />
+  <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
 
   <!-- CSP
-    Nota (para humanos que aman complicarse): Apps Script a veces redirige/carga desde googleusercontent,
-    y Firebase Auth usa endpoints googleapis/identitytoolkit/securetoken.
-    Mantengo CSP estricta pero compatible con tu setup actual (ESM desde gstatic).
+    - Firebase Auth (Google provider) puede cargar scripts desde apis.google.com
+    - Chrome DevTools intenta cargar sourcemaps desde gstatic (connect-src)
+    - Apps Script usa script.google.com + script.googleusercontent.com
   -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     base-uri 'self';
-    form-action 'self';
     object-src 'none';
+
+    form-action 'self';
 
     script-src
       'self'
       https://www.gstatic.com
+      https://apis.google.com
       https://script.google.com
       'unsafe-inline'
       'unsafe-eval';
@@ -45,13 +52,18 @@
 
     connect-src
       'self'
+      https://www.gstatic.com
       https://script.google.com
       https://script.googleusercontent.com
       https://www.googleapis.com
       https://identitytoolkit.googleapis.com
       https://securetoken.googleapis.com;
 
-    frame-src https://*.firebaseapp.com https://*.web.app;
+    frame-src
+      'self'
+      https://accounts.google.com
+      https://*.firebaseapp.com
+      https://*.web.app;
   " />
 
   <!-- CSS -->
@@ -221,6 +233,7 @@
 
         <div class="tabs__spacer"></div>
 
+        <button class="btn btn--ghost" id="btnOpenSheet" type="button" title="Abrir el Google Sheet">Sheet</button>
         <button class="btn btn--ghost" id="btnRefresh" type="button">Actualizar</button>
       </nav>
 
@@ -608,9 +621,8 @@
     </form>
   </dialog>
 
-  <!-- CONFIG (mantengo inline porque lo están usando así; si quieren CSP más dura, lo movemos a cfg.js) -->
+  <!-- CONFIG -->
   <script>
-    // Normalizador mini para evitar errores de slash final en API_BASE
     const API_BASE_RAW = "https://script.google.com/macros/s/AKfycbzov-q6zscegWhB-CDfiaZ3q3KAXaYr4f8HUCDtdpRXfsDI7zwJxWBUYYDz6t_6UPLRMQ/exec";
     const API_BASE = String(API_BASE_RAW || "").trim().replace(/\/+$/, "");
 
@@ -635,7 +647,6 @@
       signOut
     } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
 
-    // Ojo: esto es público por diseño (así funciona Firebase web). Igual, no metas secretos aquí.
     const firebaseConfig = Object.freeze({
       apiKey: "AIzaSyBm8RWGMxw9uz4iMmr0Chf3uiLzMY7TzOE",
       authDomain: "store2026-77c54.firebaseapp.com",
@@ -645,16 +656,12 @@
       appId: "1:190041780965:web:a594ed82ca71f826f3da0c"
     });
 
-    // Init Firebase
     const fbApp = initializeApp(firebaseConfig);
     const auth = getAuth(fbApp);
 
-    // Provider
     const googleProvider = new GoogleAuthProvider();
-    // (Opcional) siempre pedir cuenta:
     // googleProvider.setCustomParameters({ prompt: "select_account" });
 
-    // Export minimal surface to window (lo que tu app.js espera)
     window.__FB__ = Object.freeze({
       auth,
       onAuthStateChanged,
@@ -665,8 +672,7 @@
       signOut
     });
 
-    // Boot app
-    try{
+    try {
       const mod = await import("./app.js");
       if (!mod || typeof mod.boot !== "function") {
         console.error("app.js cargó pero no expone boot()");
