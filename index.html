@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="es-CO">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#f6f8ff" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <title>Store · Manager</title>
+  <meta name="description" content="Store interno: catálogo, inventario, ventas y movimientos. (Sheets + Apps Script + Firebase Auth)" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Store · Manager" />
+  <meta property="og:description" content="Catálogo, inventario, ventas y auditoría interna (Sheets + Apps Script + Firebase Auth)." />
+  <meta property="og:type" content="website" />
+
+  <!-- Performance hints -->
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://script.google.com" crossorigin />
+  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin />
+  <link rel="preconnect" href="https://docs.google.com" crossorigin />
+
+  <!-- CSP
+    Nota (para humanos que aman complicarse): Apps Script a veces redirige/carga desde googleusercontent,
+    y Firebase Auth usa endpoints googleapis/identitytoolkit/securetoken.
+    Mantengo CSP estricta pero compatible con tu setup actual (ESM desde gstatic).
+  -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    base-uri 'self';
+    form-action 'self';
+    object-src 'none';
+
+    script-src
+      'self'
+      https://www.gstatic.com
+      https://script.google.com
+      'unsafe-inline'
+      'unsafe-eval';
+
+    style-src 'self' 'unsafe-inline';
+
+    img-src 'self' data: https:;
+
+    connect-src
+      'self'
+      https://script.google.com
+      https://script.googleusercontent.com
+      https://www.googleapis.com
+      https://identitytoolkit.googleapis.com
+      https://securetoken.googleapis.com;
+
+    frame-src https://*.firebaseapp.com https://*.web.app;
+  " />
+
+  <!-- CSS -->
+  <link rel="preload" href="./styles.css" as="style" />
+  <link rel="stylesheet" href="./styles.css" />
+
+  <!-- Tiny hardening -->
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+</head>
+
+<body data-view="loading">
+  <noscript>
+    <div style="padding:16px;max-width:900px;margin:16px auto;border:1px solid rgba(11,16,32,.12);border-radius:14px;background:#fff;">
+      <strong>JavaScript está desactivado.</strong>
+      <div style="margin-top:6px;color:rgba(11,16,32,.75);">
+        Este panel necesita JavaScript para autenticación y conexión con Sheets/Apps Script.
+      </div>
+    </div>
+  </noscript>
+
+  <!-- Skip link -->
+  <a class="skip-link" href="#main">Saltar al contenido</a>
+
+  <!-- Topbar -->
+  <header class="topbar" role="banner">
+    <div class="topbar__left">
+      <div class="brand" aria-label="Marca Store">
+        <div class="brand__dot" aria-hidden="true"></div>
+        <div class="brand__text">
+          <div class="brand__title">Store</div>
+          <div class="brand__sub">Manager interno</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="topbar__right" role="navigation" aria-label="Estado y sesión">
+      <div class="pill" id="netPill" title="Estado de conexión" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="netLabel">Conectando…</span>
+      </div>
+
+      <div class="pill" id="userPill" hidden>
+        <span class="avatar" id="userAvatar" aria-hidden="true">👤</span>
+        <span class="mono" id="userEmail">—</span>
+        <button class="btn btn--ghost" id="btnLogout" type="button">Salir</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main id="main" class="wrap" role="main">
+    <!-- LOADING -->
+    <section class="panel" id="viewLoading" data-view="loading" aria-label="Cargando">
+      <div class="center">
+        <div class="spinner" aria-hidden="true"></div>
+        <h1 class="h1">Cargando Store…</h1>
+        <p class="muted">Validando sesión y preparando datos.</p>
+      </div>
+    </section>
+
+    <!-- AUTH / LOGIN -->
+    <section class="panel" id="viewAuth" data-view="auth" hidden aria-label="Inicio de sesión">
+      <div class="auth">
+        <div class="card auth__card">
+          <h1 class="h1">Iniciar sesión</h1>
+          <p class="muted">Acceso interno. Si no estás en la lista, no entras. Así es la vida.</p>
+
+          <form id="loginForm" class="form" autocomplete="on" novalidate>
+            <label class="field">
+              <span class="label">Correo</span>
+              <input
+                class="input"
+                id="email"
+                name="email"
+                type="email"
+                placeholder="correo@dominio.com"
+                required
+                autocomplete="email"
+                inputmode="email"
+              />
+            </label>
+
+            <label class="field">
+              <span class="label">Contraseña</span>
+              <input
+                class="input"
+                id="password"
+                name="password"
+                type="password"
+                placeholder="••••••••"
+                required
+                autocomplete="current-password"
+              />
+            </label>
+
+            <div class="row">
+              <button class="btn btn--primary" id="btnLogin" type="submit">Entrar</button>
+              <button
+                class="btn btn--ghost"
+                id="btnGoogle"
+                type="button"
+                title="Requiere Google provider habilitado en Firebase Auth"
+              >
+                Entrar con Google
+              </button>
+            </div>
+
+            <div class="hint">
+              <span class="kbd">Tip</span>
+              <span class="muted">Si usan solo Google, pueden ocultar el login por contraseña luego.</span>
+            </div>
+          </form>
+
+          <div class="divider"></div>
+
+          <div class="tiny muted">
+            <div><strong>Estado:</strong> <span id="authStatus">Listo</span></div>
+            <div><strong>API:</strong> <span class="mono" id="apiHint">—</span></div>
+          </div>
+        </div>
+
+        <div class="card auth__side">
+          <h2 class="h2">Qué puedes hacer aquí</h2>
+          <ul class="list">
+            <li>📦 Catálogo: crear/editar/activar productos</li>
+            <li>📊 Inventario: ajustes y alertas por mínimo</li>
+            <li>🧾 Ventas: carrito, total en vivo, registro</li>
+            <li>🧠 Auditoría: movimientos de inventario</li>
+          </ul>
+          <p class="muted tiny">Todo se guarda en Sheets, con historial real (movimientos). Nada de “se me perdió stock” 👀.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- APP -->
+    <section class="panel" id="viewApp" data-view="app" hidden aria-label="Aplicación">
+      <!-- Hero / KPIs -->
+      <section class="hero" aria-label="Resumen">
+        <div class="hero__left">
+          <h1 class="h1">Panel Store</h1>
+          <p class="muted">Catálogo, inventario y ventas. En COP sin decimales.</p>
+        </div>
+
+        <div class="hero__right kpis" aria-label="Indicadores">
+          <div class="kpi">
+            <div class="kpi__label">Ventas hoy</div>
+            <div class="kpi__value mono" id="kpiToday">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi__label">Ítems catálogo</div>
+            <div class="kpi__value mono" id="kpiProducts">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi__label">Stock crítico</div>
+            <div class="kpi__value mono" id="kpiLowStock">—</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Nav -->
+      <nav class="tabs" aria-label="Secciones">
+        <button class="tab is-active" data-tab="catalog" type="button">Catálogo</button>
+        <button class="tab" data-tab="inventory" type="button">Inventario</button>
+        <button class="tab" data-tab="sales" type="button">Ventas</button>
+        <button class="tab" data-tab="moves" type="button">Movimientos</button>
+        <button class="tab" data-tab="dashboard" type="button">Dashboard</button>
+
+        <div class="tabs__spacer"></div>
+
+        <button class="btn btn--ghost" id="btnRefresh" type="button">Actualizar</button>
+      </nav>
+
+      <!-- TAB: Catalog -->
+      <section class="card tabview" id="tab-catalog">
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Catálogo</h2>
+            <p class="muted tiny">Buscar, editar y activar/desactivar productos.</p>
+          </div>
+          <div class="card__actions">
+            <input class="input input--sm" id="qCatalog" type="text"
+              placeholder="Buscar (nombre, marca, categoría, sku, stock)…" />
+            <button class="btn btn--primary" id="btnNewProduct" type="button">Nuevo producto</button>
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table" id="tblCatalog">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Producto</th>
+                <th>Marca</th>
+                <th>Categoría</th>
+                <th class="num">Precio venta</th>
+                <th class="num">Stock</th>
+                <th>Estado</th>
+                <th class="num">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="catalogBody">
+              <tr><td colspan="8" class="muted">Cargando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Inventory -->
+      <section class="card tabview" id="tab-inventory" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Inventario</h2>
+            <p class="muted tiny">Ajustes rápidos y alertas de mínimo.</p>
+          </div>
+          <div class="card__actions">
+            <input class="input input--sm" id="qInventory" type="text" placeholder="Buscar por ID producto…" />
+            <button class="btn btn--primary" id="btnAdjustStock" type="button">Ajustar stock</button>
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table" id="tblInventory">
+            <thead>
+              <tr>
+                <th>Producto ID</th>
+                <th class="num">Stock</th>
+                <th class="num">Mínimo</th>
+                <th>Ubicación</th>
+                <th>Actualizado</th>
+              </tr>
+            </thead>
+            <tbody id="inventoryBody">
+              <tr><td colspan="5" class="muted">Cargando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Sales -->
+      <section class="card tabview" id="tab-sales" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Ventas</h2>
+            <p class="muted tiny">Carrito simple, total en vivo, registro en Sheets.</p>
+          </div>
+          <div class="card__actions">
+            <button class="btn btn--primary" id="btnNewSale" type="button">Nueva venta</button>
+          </div>
+        </div>
+
+        <!-- Pedidos pendientes -->
+        <div class="card subcard" id="ordersPane" style="margin-top:14px;">
+          <div class="card__head">
+            <div>
+              <h3 class="h3">Pedidos pendientes</h3>
+              <p class="muted tiny">Ventas guardadas como <b>Pendiente</b> (seguimiento + convertir a venta).</p>
+            </div>
+            <div class="card__actions">
+              <button class="btn btn--ghost" id="btnRefreshOrders" type="button">Actualizar</button>
+            </div>
+          </div>
+
+          <div class="tablewrap">
+            <table class="table table--compact">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Cliente</th>
+                  <th class="num">Total</th>
+                  <th>Notas</th>
+                  <th class="num">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="ordersBody">
+                <tr><td colspan="5" class="muted">Cargando…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="tiny muted" id="ordersMeta"></div>
+        </div>
+
+        <div class="empty" id="salesEmpty">
+          <div class="empty__icon">🧾</div>
+          <div class="empty__title">Aún no hay una venta abierta</div>
+          <div class="empty__text muted">Crea una nueva venta para agregar productos y guardar.</div>
+        </div>
+
+        <div id="salePane" hidden>
+          <div class="saleGrid">
+            <div class="saleCol card subcard">
+              <h3 class="h3">Carrito</h3>
+              <div class="row">
+                <input class="input input--sm" id="saleSearch" type="text" list="saleProductsList" placeholder="Buscar producto (lista)…" autocomplete="off" />
+                <datalist id="saleProductsList"></datalist>
+                <button class="btn btn--ghost" id="btnAddToSale" type="button">Agregar</button>
+              </div>
+
+              <div class="tablewrap">
+                <table class="table table--compact">
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th class="num">Cant.</th>
+                      <th class="num">Unit.</th>
+                      <th class="num">Subtotal</th>
+                      <th class="num">—</th>
+                    </tr>
+                  </thead>
+                  <tbody id="saleItemsBody">
+                    <tr><td colspan="5" class="muted">Sin items…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="saleTotal">
+                <div class="muted">Total</div>
+                <div class="mono big" id="saleTotal">$0</div>
+              </div>
+            </div>
+
+            <div class="saleCol card subcard">
+              <h3 class="h3">Guardar venta</h3>
+
+              <label class="field">
+                <span class="label">Cliente <span class="muted tiny">(opcional)</span></span>
+                <input class="input" id="saleCustomer" type="text" placeholder="ID o nombre corto" />
+              </label>
+
+              <label class="field">
+                <span class="label">Método de pago</span>
+                <select class="input" id="salePay">
+                  <option value="cash">Efectivo</option>
+                  <option value="transfer">Transferencia</option>
+                  <option value="card">Tarjeta</option>
+                  <option value="mixed">Mixto</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span class="label">Estado</span>
+                <select class="input" id="saleStatus">
+                  <option value="paid">Pagado</option>
+                  <option value="pending">Pendiente</option>
+                  <option value="cancelled">Cancelado</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span class="label">Notas</span>
+                <textarea class="input" id="saleNotes" rows="3" placeholder="Observaciones…"></textarea>
+              </label>
+
+              <div class="row">
+                <button class="btn btn--primary" id="btnSaveSale" type="button">Guardar venta</button>
+                <button class="btn btn--ghost" id="btnCancelSale" type="button">Cerrar</button>
+              </div>
+
+              <p class="tiny muted">Guardar descuenta inventario (si no está cancelada) y deja movimiento registrado.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: Moves -->
+      <section class="card tabview" id="tab-moves" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Movimientos</h2>
+            <p class="muted tiny">Auditoría: entradas, salidas, ajustes, ventas.</p>
+          </div>
+          <div class="card__actions">
+            <input class="input input--sm" id="qMoves" type="text" placeholder="Filtrar por producto o ref…" />
+          </div>
+        </div>
+
+        <div class="empty">
+          <div class="empty__icon">🧠</div>
+          <div class="empty__title">Esta vista la conectamos con endpoint cuando sigamos</div>
+          <div class="empty__text muted">El backend ya guarda movimientos. En el front toca listar y filtrar.</div>
+        </div>
+      </section>
+
+      <!-- TAB: Dashboard -->
+      <section class="card tabview" id="tab-dashboard" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Dashboard</h2>
+            <p class="muted tiny">Resumen rápido: ventas hoy y stock crítico.</p>
+          </div>
+        </div>
+
+        <div class="dash">
+          <div class="card subcard">
+            <div class="kpi kpi--big">
+              <div class="kpi__label">Ventas hoy</div>
+              <div class="kpi__value mono" id="dashToday">—</div>
+            </div>
+            <div class="muted tiny">Basado en ventas con status pagado.</div>
+          </div>
+
+          <div class="card subcard">
+            <h3 class="h3">Stock crítico</h3>
+            <div class="tablewrap">
+              <table class="table table--compact">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th class="num">Stock</th>
+                    <th class="num">Mínimo</th>
+                  </tr>
+                </thead>
+                <tbody id="lowStockBody">
+                  <tr><td colspan="3" class="muted">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Toast -->
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </section>
+  </main>
+
+  <!-- Modal: Product -->
+  <dialog class="modal" id="modalProduct">
+    <form method="dialog" class="modal__card" id="productForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3" id="productTitle">Producto</h3>
+          <p class="muted tiny">Crear o editar producto.</p>
+        </div>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+      </div>
+
+      <div class="grid2">
+        <label class="field">
+          <span class="label">ID</span>
+          <input class="input" id="p_id" type="text" placeholder="(auto)" />
+        </label>
+
+        <label class="field">
+          <span class="label">Activo</span>
+          <select class="input" id="p_active">
+            <option value="true">Sí</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Nombre</span>
+          <input class="input" id="p_name" type="text" required />
+        </label>
+
+        <label class="field">
+          <span class="label">Marca</span>
+          <input class="input" id="p_brand" type="text" />
+        </label>
+
+        <label class="field">
+          <span class="label">Categoría</span>
+          <input class="input" id="p_category" type="text" placeholder="instrumento / accesorio / arte…" />
+        </label>
+
+        <label class="field">
+          <span class="label">SKU <span class="muted tiny">(código interno opcional)</span></span>
+          <input class="input" id="p_sku" type="text" placeholder="Ej: GTR-BLCA-01" />
+        </label>
+
+        <label class="field">
+          <span class="label">Costo (COP) <span class="muted tiny">· interno</span></span>
+          <input class="input" id="p_cost" type="number" inputmode="numeric" step="1" min="0" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">Lo que les vale a ustedes (proveedor + costos si aplican).</span>
+        </label>
+
+        <label class="field">
+          <span class="label">Ganancia (%) <span class="muted tiny">· sobre costo</span></span>
+          <input class="input" id="p_margin" type="number" inputmode="decimal" step="0.1" min="0" placeholder="30" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">Porcentaje de ganancia sobre el costo (markup).</span>
+        </label>
+
+        <label class="field">
+          <span class="label">Precio de venta (COP)</span>
+          <input class="input" id="p_price" type="number" inputmode="numeric" step="1" min="0" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">Lo que paga el cliente (precio final).</span>
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Descripción</span>
+          <textarea class="input" id="p_desc" rows="3"></textarea>
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Imagen URL</span>
+          <input class="input" id="p_image" type="url" placeholder="https://..." />
+        </label>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveProduct" type="button">Guardar</button>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Stock adjust -->
+  <dialog class="modal" id="modalStock">
+    <form method="dialog" class="modal__card" id="stockForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">Ajuste de inventario</h3>
+          <p class="muted tiny">Esto crea movimiento y actualiza stock.</p>
+        </div>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+      </div>
+
+      <div class="grid2">
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Producto ID</span>
+          <input class="input" id="s_product_id" type="text" placeholder="P…" required />
+        </label>
+
+        <label class="field">
+          <span class="label">Tipo</span>
+          <select class="input" id="s_type">
+            <option value="adjust">Ajuste</option>
+            <option value="purchase">Compra</option>
+            <option value="loss">Pérdida</option>
+            <option value="return">Devolución</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Cantidad (+ / -)</span>
+          <input class="input" id="s_qty" type="number" step="1" inputmode="numeric" required />
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Referencia <span class="muted tiny">(opcional)</span></span>
+          <input class="input" id="s_ref" type="text" placeholder="FAC-123 / nota..." />
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Nota</span>
+          <textarea class="input" id="s_note" rows="2" placeholder="Motivo del ajuste…"></textarea>
+        </label>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveStock" type="button">Aplicar</button>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- CONFIG (mantengo inline porque lo están usando así; si quieren CSP más dura, lo movemos a cfg.js) -->
+  <script>
+    // Normalizador mini para evitar errores de slash final en API_BASE
+    const API_BASE_RAW = "https://script.google.com/macros/s/AKfycbzov-q6zscegWhB-CDfiaZ3q3KAXaYr4f8HUCDtdpRXfsDI7zwJxWBUYYDz6t_6UPLRMQ/exec";
+    const API_BASE = String(API_BASE_RAW || "").trim().replace(/\/+$/, "");
+
+    window.STORE_CFG = Object.freeze({
+      API_BASE,
+      SHEET_URL: "https://docs.google.com/spreadsheets/d/1vBSv51xdLwdidNBpBpzKfhha7kBz0D1S4cm8qJJckoQ/edit",
+      CURRENCY: "COP",
+      LOCALE: "es-CO",
+      BUILD: "2026-02-10",
+    });
+  </script>
+
+  <!-- Firebase + Boot -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+    import {
+      getAuth,
+      onAuthStateChanged,
+      signInWithEmailAndPassword,
+      signInWithPopup,
+      GoogleAuthProvider,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+
+    // Ojo: esto es público por diseño (así funciona Firebase web). Igual, no metas secretos aquí.
+    const firebaseConfig = Object.freeze({
+      apiKey: "AIzaSyBm8RWGMxw9uz4iMmr0Chf3uiLzMY7TzOE",
+      authDomain: "store2026-77c54.firebaseapp.com",
+      projectId: "store2026-77c54",
+      storageBucket: "store2026-77c54.firebasestorage.app",
+      messagingSenderId: "190041780965",
+      appId: "1:190041780965:web:a594ed82ca71f826f3da0c"
+    });
+
+    // Init Firebase
+    const fbApp = initializeApp(firebaseConfig);
+    const auth = getAuth(fbApp);
+
+    // Provider
+    const googleProvider = new GoogleAuthProvider();
+    // (Opcional) siempre pedir cuenta:
+    // googleProvider.setCustomParameters({ prompt: "select_account" });
+
+    // Export minimal surface to window (lo que tu app.js espera)
+    window.__FB__ = Object.freeze({
+      auth,
+      onAuthStateChanged,
+      signInWithEmailAndPassword,
+      signInWithPopup,
+      GoogleAuthProvider,
+      googleProvider,
+      signOut
+    });
+
+    // Boot app
+    try{
+      const mod = await import("./app.js");
+      if (!mod || typeof mod.boot !== "function") {
+        console.error("app.js cargó pero no expone boot()");
+        alert("Error: app.js no expone boot(). Revisa export en app.js.");
+      } else {
+        mod.boot();
+      }
+    } catch (e) {
+      console.error("Error cargando app.js:", e);
+      alert("Error cargando la app. Revisa consola (F12).");
+    }
+  </script>
+</body>
+</html>
