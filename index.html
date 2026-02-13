@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="es-CO">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#f6f8ff" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+  <title>Store · Manager</title>
+  <meta name="description" content="Store interno: catálogo, inventario, ventas y movimientos. (Sheets + Apps Script + Firebase Auth)" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Store · Manager" />
+  <meta property="og:description" content="Catálogo, inventario, ventas y auditoría interna (Sheets + Apps Script + Firebase Auth)." />
+  <meta property="og:type" content="website" />
+
+  <!-- Performance hints -->
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://apis.google.com" crossorigin />
+  <link rel="preconnect" href="https://accounts.google.com" crossorigin />
+  <link rel="preconnect" href="https://script.google.com" crossorigin />
+  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin />
+  <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+
+  <!-- CSP (light-tight, pero compatible con inline scripts actuales) -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    base-uri 'self';
+    object-src 'none';
+    form-action 'self';
+    frame-ancestors 'self';
+
+    script-src
+      'self'
+      https://www.gstatic.com
+      https://apis.google.com
+      https://script.google.com
+      https://cdn.jsdelivr.net
+      'unsafe-inline';
+
+    style-src 'self' 'unsafe-inline';
+
+    img-src 'self' data: https:;
+
+    connect-src
+      'self'
+      https://www.gstatic.com
+      https://script.google.com
+      https://script.googleusercontent.com
+      https://www.googleapis.com
+      https://identitytoolkit.googleapis.com
+      https://securetoken.googleapis.com;
+
+    frame-src
+      'self'
+      https://accounts.google.com
+      https://*.firebaseapp.com
+      https://*.web.app;
+  " />
+
+  <!-- Build / Cache bust -->
+  <script>
+    window.__BUILD__ = "2026-02-12.3";
+  </script>
+
+  <!-- CSS -->
+  <link rel="preload" href="./styles.css" as="style" />
+  <link rel="stylesheet" href="./styles.css" id="mainStyles" />
+  <script>
+    (function () {
+      var link = document.getElementById("mainStyles");
+      if (!link) return;
+      var v = encodeURIComponent(window.__BUILD__ || "");
+      if (v) link.href = "./styles.css?v=" + v;
+    })();
+  </script>
+
+  <!-- jsPDF (para descarga PDF real desde Restock) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- Micro estilos SOLO para Restock (mantener mínimo aquí; lo grande va en styles.css) -->
+  <style>
+    .restockBtn{
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(11,16,32,.10);
+      background: rgba(255,255,255,.86);
+      box-shadow: 0 8px 20px rgba(11,16,32,.06);
+      cursor: pointer;
+      height: 40px;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .restockBtn:hover{ filter: brightness(0.99); }
+    .restockBtn:active{ transform: translateY(1px); }
+
+    .restockBadge{
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      background: rgba(12,65,196,.14);
+      border: 1px solid rgba(12,65,196,.18);
+      color: rgba(11,16,32,.9);
+    }
+    .restockBadge[hidden]{ display:none !important; }
+
+    .restockGrid{ display:grid; grid-template-columns: 1fr; gap: 12px; }
+    .restockTotals{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px dashed rgba(11,16,32,.16);
+      border-radius: 14px;
+      background: rgba(255,255,255,.6);
+    }
+    .restockTotals .mono{ font-variant-numeric: tabular-nums; }
+    .miniNum{
+      width: 84px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(11,16,32,.12);
+      background: rgba(255,255,255,.86);
+    }
+
+    @media print{
+      body{ background:#fff !important; }
+      .topbar, .tabs, .toast, dialog::backdrop{ display:none !important; }
+      dialog.modal[open]{ position: static !important; display:block !important; border: 0 !important; }
+      .modal__card{ box-shadow:none !important; border: 0 !important; }
+    }
+  </style>
+</head>
+
+<body data-view="loading">
+  <noscript>
+    <div style="padding:16px;max-width:900px;margin:16px auto;border:1px solid rgba(11,16,32,.12);border-radius:14px;background:#fff;">
+      <strong>JavaScript está desactivado.</strong>
+      <div style="margin-top:6px;color:rgba(11,16,32,.75);">
+        Este panel necesita JavaScript para autenticación y conexión con Sheets/Apps Script.
+      </div>
+    </div>
+  </noscript>
+
+  <a class="skip-link" href="#main">Saltar al contenido</a>
+
+  <!-- Topbar -->
+  <header class="topbar" role="banner">
+    <div class="topbar__left">
+      <div class="brand" aria-label="Marca Store">
+        <div class="brand__dot" aria-hidden="true"></div>
+        <div class="brand__text">
+          <div class="brand__title">Store</div>
+          <div class="brand__sub">Manager interno</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="topbar__right" role="navigation" aria-label="Estado y sesión">
+      <div class="pill" id="netPill" title="Estado de conexión" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="netLabel">Conectando…</span>
+      </div>
+
+      <!-- ✅ Restock: OCULTO hasta login -->
+      <button class="restockBtn" id="btnRestockOpen" type="button"
+        title="Pedido a proveedor (Restock)"
+        aria-label="Abrir pedido a proveedor"
+        hidden>
+        <span aria-hidden="true">🧺</span>
+        <span class="tiny" style="font-weight:700;">Restock</span>
+        <span class="restockBadge" id="restockCount" hidden>0</span>
+      </button>
+
+      <div class="pill" id="userPill" hidden>
+        <span class="avatar" id="userAvatar" aria-hidden="true">👤</span>
+        <span class="mono" id="userEmail">—</span>
+        <button class="btn btn--ghost" id="btnLogout" type="button">Salir</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="wrap" role="main">
+    <!-- LOADING -->
+    <section class="panel" id="viewLoading" data-view="loading" aria-label="Cargando">
+      <div class="center">
+        <div class="spinner" aria-hidden="true"></div>
+        <h1 class="h1">Cargando Store…</h1>
+        <p class="muted">Validando sesión y preparando datos.</p>
+      </div>
+    </section>
+
+    <!-- AUTH -->
+    <section class="panel" id="viewAuth" data-view="auth" hidden aria-label="Inicio de sesión">
+      <div class="auth">
+        <div class="card auth__card">
+          <h1 class="h1">Iniciar sesión</h1>
+          <p class="muted">Acceso interno. Si no estás en la lista, no entras. Así es la vida.</p>
+
+          <form id="loginForm" class="form" autocomplete="on" novalidate>
+            <label class="field">
+              <span class="label">Correo</span>
+              <input class="input" id="email" name="email" type="email" placeholder="correo@dominio.com"
+                required autocomplete="email" inputmode="email" />
+            </label>
+
+            <label class="field">
+              <span class="label">Contraseña</span>
+              <input class="input" id="password" name="password" type="password" placeholder="••••••••"
+                required autocomplete="current-password" />
+            </label>
+
+            <div class="row">
+              <button class="btn btn--primary" id="btnLogin" type="submit">Entrar</button>
+              <button class="btn btn--ghost" id="btnGoogle" type="button"
+                title="Requiere Google provider habilitado en Firebase Auth">
+                Entrar con Google
+              </button>
+            </div>
+
+            <div class="hint">
+              <span class="kbd">Tip</span>
+              <span class="muted">Si usan solo Google, pueden ocultar el login por contraseña luego.</span>
+            </div>
+          </form>
+
+          <div class="divider"></div>
+
+          <div class="tiny muted">
+            <div><strong>Estado:</strong> <span id="authStatus">Listo</span></div>
+            <div><strong>API:</strong> <span class="mono" id="apiHint">—</span></div>
+            <div><strong>Build:</strong> <span class="mono" id="buildHint">—</span></div>
+          </div>
+        </div>
+
+        <div class="card auth__side">
+          <h2 class="h2">Qué puedes hacer aquí</h2>
+          <ul class="list">
+            <li>📦 Catálogo: crear/editar/activar productos</li>
+            <li>📊 Inventario: ajustes y alertas por mínimo</li>
+            <li>🧾 Ventas: carrito, total en vivo, registro</li>
+            <li>🧠 Auditoría: movimientos de inventario</li>
+            <li>🧺 Restock: pedido a proveedor descargable en PDF</li>
+          </ul>
+          <p class="muted tiny">Todo se guarda en Sheets, con historial real. Nada de “se me perdió stock” 👀.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- APP -->
+    <section class="panel" id="viewApp" data-view="app" hidden aria-label="Aplicación">
+      <!-- Hero / KPIs -->
+      <section class="hero" aria-label="Resumen">
+        <div class="hero__left">
+          <h1 class="h1">Panel Store</h1>
+          <p class="muted">Catálogo, inventario y ventas. En COP sin decimales.</p>
+        </div>
+
+        <div class="hero__right kpis" aria-label="Indicadores">
+          <div class="kpi">
+            <div class="kpi__label">Ventas hoy</div>
+            <div class="kpi__value mono" id="kpiToday">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi__label">Ítems catálogo</div>
+            <div class="kpi__value mono" id="kpiProducts">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi__label">Stock crítico</div>
+            <div class="kpi__value mono" id="kpiLowStock">—</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tabs -->
+      <nav class="tabs" aria-label="Secciones">
+        <button class="tab is-active" data-tab="catalog" type="button" aria-selected="true">Catálogo</button>
+        <button class="tab" data-tab="inventory" type="button" aria-selected="false">Inventario</button>
+        <button class="tab" data-tab="sales" type="button" aria-selected="false">Ventas</button>
+        <button class="tab" data-tab="moves" type="button" aria-selected="false">Movimientos</button>
+        <button class="tab" data-tab="dashboard" type="button" aria-selected="false">Dashboard</button>
+        <div class="tabs__spacer"></div>
+        <button class="btn btn--ghost" id="btnRefresh" type="button">Actualizar</button>
+      </nav>
+
+      <!-- TAB: Catalog -->
+      <section class="card tabview" id="tab-catalog">
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Catálogo</h2>
+            <p class="muted tiny">Buscar, editar y activar/desactivar productos.</p>
+          </div>
+          <div class="card__actions">
+            <input class="input input--sm" id="qCatalog" type="text"
+              placeholder="Buscar (nombre, marca, categoría, sku, stock)…" />
+            <button class="btn btn--primary" id="btnNewProduct" type="button">Nuevo producto</button>
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table" id="tblCatalog" aria-label="Tabla de productos">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Producto</th>
+                <th>Marca</th>
+                <th>Categoría</th>
+                <th class="num">Precio venta</th>
+                <th class="num">Stock</th>
+                <th>Estado</th>
+                <th class="num">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="catalogBody">
+              <tr><td colspan="8" class="muted">Cargando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Inventory -->
+      <section class="card tabview" id="tab-inventory" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Inventario</h2>
+            <p class="muted tiny">Ajustes rápidos y alertas de mínimo.</p>
+          </div>
+          <div class="card__actions">
+            <input class="input input--sm" id="qInventory" type="text" placeholder="Buscar por ID producto…" />
+            <button class="btn btn--primary" id="btnAdjustStock" type="button">Ajustar stock</button>
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table" id="tblInventory" aria-label="Tabla de inventario">
+            <thead>
+              <tr>
+                <th>Producto ID</th>
+                <th class="num">Stock</th>
+                <th class="num">Mínimo</th>
+                <th>Ubicación</th>
+                <th>Actualizado</th>
+              </tr>
+            </thead>
+            <tbody id="inventoryBody">
+              <tr><td colspan="5" class="muted">Cargando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Sales -->
+      <section class="card tabview" id="tab-sales" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Ventas</h2>
+            <p class="muted tiny">Carrito simple, total en vivo, registro en Sheets.</p>
+          </div>
+          <div class="card__actions">
+            <button class="btn btn--primary" id="btnNewSale" type="button">Nueva venta</button>
+          </div>
+        </div>
+
+        <div class="card subcard" id="ordersPane" style="margin-top:14px;">
+          <div class="card__head">
+            <div>
+              <h3 class="h3">Pedidos pendientes</h3>
+              <p class="muted tiny">Ventas guardadas como <b>Pendiente</b>.</p>
+            </div>
+            <div class="card__actions">
+              <button class="btn btn--ghost" id="btnRefreshOrders" type="button">Actualizar</button>
+            </div>
+          </div>
+
+          <div class="tablewrap">
+            <table class="table table--compact" aria-label="Tabla de pedidos pendientes">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Cliente</th>
+                  <th class="num">Total</th>
+                  <th>Notas</th>
+                  <th class="num">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="ordersBody">
+                <tr><td colspan="5" class="muted">Cargando…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="tiny muted" id="ordersMeta"></div>
+        </div>
+
+        <div class="empty" id="salesEmpty">
+          <div class="empty__icon">🧾</div>
+          <div class="empty__title">Aún no hay una venta abierta</div>
+          <div class="empty__text muted">Crea una nueva venta para agregar productos y guardar.</div>
+        </div>
+
+        <div id="salePane" hidden>
+          <div class="saleGrid">
+            <div class="saleCol card subcard">
+              <h3 class="h3">Carrito</h3>
+              <div class="row">
+                <input class="input input--sm" id="saleSearch" type="text" list="saleProductsList"
+                  placeholder="Buscar producto (lista)…" autocomplete="off" />
+                <datalist id="saleProductsList"></datalist>
+                <button class="btn btn--ghost" id="btnAddToSale" type="button">Agregar</button>
+              </div>
+
+              <div class="tablewrap">
+                <table class="table table--compact" aria-label="Items de la venta">
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th class="num">Cant.</th>
+                      <th class="num">Unit.</th>
+                      <th class="num">Subtotal</th>
+                      <th class="num">—</th>
+                    </tr>
+                  </thead>
+                  <tbody id="saleItemsBody">
+                    <tr><td colspan="5" class="muted">Sin items…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="saleTotal">
+                <div class="muted">Total</div>
+                <div class="mono big" id="saleTotal">$0</div>
+              </div>
+            </div>
+
+            <div class="saleCol card subcard">
+              <h3 class="h3">Guardar venta</h3>
+
+              <label class="field">
+                <span class="label">Cliente <span class="muted tiny">(opcional)</span></span>
+                <input class="input" id="saleCustomer" type="text" placeholder="ID o nombre corto" />
+              </label>
+
+              <label class="field">
+                <span class="label">Método de pago</span>
+                <select class="input" id="salePay">
+                  <option value="cash">Efectivo</option>
+                  <option value="transfer">Transferencia</option>
+                  <option value="card">Tarjeta</option>
+                  <option value="mixed">Mixto</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span class="label">Estado</span>
+                <select class="input" id="saleStatus">
+                  <option value="paid">Pagado</option>
+                  <option value="pending">Pendiente</option>
+                  <option value="cancelled">Cancelado</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span class="label">Notas</span>
+                <textarea class="input" id="saleNotes" rows="3" placeholder="Observaciones…"></textarea>
+              </label>
+
+              <div class="row">
+                <button class="btn btn--primary" id="btnSaveSale" type="button">Guardar venta</button>
+                <button class="btn btn--ghost" id="btnCancelSale" type="button">Cerrar</button>
+              </div>
+
+              <p class="tiny muted">Guardar descuenta inventario (si no está cancelada) y deja movimiento registrado.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: Moves -->
+      <section class="card tabview" id="tab-moves" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Movimientos</h2>
+            <p class="muted tiny">Auditoría: entradas, salidas, ajustes, ventas.</p>
+          </div>
+          <div class="card__actions">
+            <input class="input input--sm" id="qMoves" type="text" placeholder="Filtrar por producto o ref…" />
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table table--compact" aria-label="Tabla de movimientos">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Producto</th>
+                <th>Tipo</th>
+                <th class="num">Cantidad</th>
+                <th>Referencia</th>
+                <th>Fecha</th>
+              </tr>
+            </thead>
+            <tbody id="movesBody">
+              <tr><td colspan="6" class="muted">Cargando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="tiny muted" style="padding:12px 14px;">
+          Tip: puedes buscar por nombre/ID, referencia (FAC-123) o el id de la venta.
+        </div>
+      </section>
+
+      <!-- TAB: Dashboard -->
+      <section class="card tabview" id="tab-dashboard" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Dashboard</h2>
+            <p class="muted tiny">Resumen rápido: ventas hoy y stock crítico.</p>
+          </div>
+        </div>
+
+        <div class="dash">
+          <div class="card subcard">
+            <div class="kpi kpi--big">
+              <div class="kpi__label">Ventas hoy</div>
+              <div class="kpi__value mono" id="dashToday">—</div>
+            </div>
+            <div class="muted tiny">Basado en ventas con status pagado.</div>
+          </div>
+
+          <div class="card subcard">
+            <h3 class="h3">Stock crítico</h3>
+            <div class="tablewrap">
+              <table class="table table--compact" aria-label="Tabla de stock crítico">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th class="num">Stock</th>
+                    <th class="num">Mínimo</th>
+                  </tr>
+                </thead>
+                <tbody id="lowStockBody">
+                  <tr><td colspan="3" class="muted">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </section>
+  </main>
+
+  <!-- ✅ Modal: Restock -->
+  <dialog class="modal" id="modalRestock" aria-label="Pedido a proveedor">
+    <form method="dialog" class="modal__card" id="restockForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">🧺 Pedido a proveedor (Restock)</h3>
+          <p class="muted tiny">Agrega ítems desde Catálogo → ajusta cantidades → descarga PDF.</p>
+        </div>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+      </div>
+
+      <div class="restockGrid">
+        <div class="grid2">
+          <label class="field">
+            <span class="label">Proveedor</span>
+            <input class="input" id="restockSupplier" type="text" placeholder="Nombre del proveedor (opcional)" />
+          </label>
+
+          <label class="field">
+            <span class="label">Notas</span>
+            <input class="input" id="restockNotes" type="text" placeholder="Ej: urgente / entrega viernes / etc." />
+          </label>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table table--compact" aria-label="Tabla restock">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th class="num">Cant.</th>
+                <th class="num">Costo</th>
+                <th class="num">Subtotal</th>
+                <th class="num">—</th>
+              </tr>
+            </thead>
+            <tbody id="restockBody">
+              <tr><td colspan="5" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="restockTotals">
+          <div>
+            <div class="tiny muted">Unidades</div>
+            <div class="mono big" id="restockTotalUnits">0</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="tiny muted">Total costo</div>
+            <div class="mono big" id="restockTotalCost">$0</div>
+          </div>
+        </div>
+
+        <div class="row" style="justify-content:flex-end;">
+          <button class="btn btn--ghost" id="btnClearRestock" type="button">Limpiar</button>
+          <button class="btn btn--primary" id="btnPrintRestock" type="button">Descargar PDF</button>
+        </div>
+
+        <div class="tiny muted">
+          Tip: este pedido es para <b>compras</b>. No mueve inventario hasta que realmente llegue la mercancía.
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Product -->
+  <dialog class="modal" id="modalProduct">
+    <form method="dialog" class="modal__card" id="productForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3" id="productTitle">Producto</h3>
+          <p class="muted tiny">Crear o editar producto.</p>
+        </div>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+      </div>
+
+      <div class="grid2">
+        <label class="field">
+          <span class="label">ID</span>
+          <input class="input" id="p_id" type="text" placeholder="(auto)" />
+        </label>
+
+        <label class="field">
+          <span class="label">Activo</span>
+          <select class="input" id="p_active">
+            <option value="true">Sí</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Nombre</span>
+          <input class="input" id="p_name" type="text" required />
+        </label>
+
+        <label class="field">
+          <span class="label">Marca</span>
+          <input class="input" id="p_brand" type="text" />
+        </label>
+
+        <label class="field">
+          <span class="label">Categoría</span>
+          <input class="input" id="p_category" type="text" placeholder="instrumento / accesorio / arte…" />
+        </label>
+
+        <label class="field">
+          <span class="label">SKU <span class="muted tiny">(código interno opcional)</span></span>
+          <input class="input" id="p_sku" type="text" placeholder="Ej: GTR-BLCA-01" />
+        </label>
+
+        <label class="field">
+          <span class="label">Costo (COP) <span class="muted tiny">· interno</span></span>
+          <input class="input" id="p_cost" type="number" inputmode="numeric" step="1" min="0" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">Lo que les vale a ustedes.</span>
+        </label>
+
+        <label class="field">
+          <span class="label">Ganancia (%) <span class="muted tiny">· sobre costo</span></span>
+          <input class="input" id="p_margin" type="number" inputmode="decimal" step="0.1" min="0" placeholder="30" />
+        </label>
+
+        <label class="field">
+          <span class="label">Precio de venta (COP)</span>
+          <input class="input" id="p_price" type="number" inputmode="numeric" step="1" min="0" />
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Descripción</span>
+          <textarea class="input" id="p_desc" rows="3"></textarea>
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Imagen URL</span>
+          <input class="input" id="p_image" type="url" placeholder="https://..." />
+        </label>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveProduct" type="button">Guardar</button>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Stock -->
+  <dialog class="modal" id="modalStock">
+    <form method="dialog" class="modal__card" id="stockForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">Ajuste de inventario</h3>
+          <p class="muted tiny">Esto crea movimiento y actualiza stock.</p>
+        </div>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+      </div>
+
+      <div class="grid2">
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Producto ID</span>
+          <input class="input" id="s_product_id" type="text" placeholder="P…" required />
+        </label>
+
+        <label class="field">
+          <span class="label">Tipo</span>
+          <select class="input" id="s_type">
+            <option value="adjust">Ajuste</option>
+            <option value="purchase">Compra</option>
+            <option value="loss">Pérdida</option>
+            <option value="return">Devolución</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Cantidad (+ / -)</span>
+          <input class="input" id="s_qty" type="number" step="1" inputmode="numeric" required />
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Referencia <span class="muted tiny">(opcional)</span></span>
+          <input class="input" id="s_ref" type="text" placeholder="FAC-123 / nota..." />
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Nota</span>
+          <textarea class="input" id="s_note" rows="2" placeholder="Motivo del ajuste…"></textarea>
+        </label>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveStock" type="button">Aplicar</button>
+        <button class="btn btn--ghost" value="cancel" type="submit">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- CONFIG -->
+  <script>
+    const API_BASE_RAW = "https://script.google.com/macros/s/AKfycbxPQu6CUIat3PzcuP6yz9n5IP8fmMus3f7asj437VrH54z_MkN-qcFgf99bXVP6HENOTA/exec";
+    const API_BASE = String(API_BASE_RAW || "").trim().replace(/\/+$/, "");
+
+    window.STORE_CFG = Object.freeze({
+      API_BASE,
+      CURRENCY: "COP",
+      LOCALE: "es-CO",
+      BUILD: window.__BUILD__ || "2026-02-12.3",
+    });
+  </script>
+
+  <!-- Firebase + Boot -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+    import {
+      getAuth,
+      onAuthStateChanged,
+      signInWithEmailAndPassword,
+      signInWithPopup,
+      GoogleAuthProvider,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+
+    // UI hints (si existen)
+    const buildHint = document.getElementById("buildHint");
+    if (buildHint) buildHint.textContent = (window.STORE_CFG && window.STORE_CFG.BUILD) ? window.STORE_CFG.BUILD : "—";
+    const apiHint = document.getElementById("apiHint");
+    if (apiHint) apiHint.textContent = (window.STORE_CFG && window.STORE_CFG.API_BASE) ? window.STORE_CFG.API_BASE : "—";
+
+    const firebaseConfig = Object.freeze({
+      apiKey: "AIzaSyBm8RWGMxw9uz4iMmr0Chf3uiLzMY7TzOE",
+      authDomain: "store2026-77c54.firebaseapp.com",
+      projectId: "store2026-77c54",
+      storageBucket: "store2026-77c54.firebasestorage.app",
+      messagingSenderId: "190041780965",
+      appId: "1:190041780965:web:a594ed82ca71f826f3da0c"
+    });
+
+    const fbApp = initializeApp(firebaseConfig);
+    const auth = getAuth(fbApp);
+
+    const googleProvider = new GoogleAuthProvider();
+    // googleProvider.setCustomParameters({ prompt: "select_account" });
+
+    window.__FB__ = Object.freeze({
+      auth,
+      onAuthStateChanged,
+      signInWithEmailAndPassword,
+      signInWithPopup,
+      GoogleAuthProvider,
+      googleProvider,
+      signOut
+    });
+
+    // Airbag anti-typo legacy (si algo llama esto, no se muere todo)
+    window.setsetViewSafe_ = window.setsetViewSafe_ || function(v){
+      try { document.body.dataset.view = String(v || 'loading'); } catch {}
+    };
+
+    // Mostrar/ocultar botón Restock + user pill según auth (independiente de app.js)
+    const restockBtn = document.getElementById("btnRestockOpen");
+    const userPill = document.getElementById("userPill");
+    onAuthStateChanged(auth, (user) => {
+      if (restockBtn) restockBtn.hidden = !user;
+      if (userPill) userPill.hidden = !user;
+    });
+
+    // Cache-busting del app.js
+    const v = encodeURIComponent((window.STORE_CFG && window.STORE_CFG.BUILD) || "");
+    const appUrl = v ? `./app.js?v=${v}` : "./app.js";
+
+    try {
+      const mod = await import(appUrl);
+      if (!mod || typeof mod.boot !== "function") {
+        console.error("app.js cargó pero no expone boot()");
+        alert("Error: app.js no expone boot(). Revisa el export en app.js.");
+      } else {
+        mod.boot();
+      }
+    } catch (e) {
+      console.error("Error cargando app.js:", e);
+      alert("Error cargando la app. Revisa consola (F12).");
+    }
+  </script>
+</body>
+</html>
