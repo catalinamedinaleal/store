@@ -1,19 +1,16 @@
 'use strict';
 
 /* =============================================================================
-  ui.js — Store UI Kernel (render + UX helpers) v3.8 PRO++
-  ---------------------------------------------------------------------------
-  ✅ DOM cache + validación suave (warn si faltan IDs)
-  ✅ Tabs robustas: aria-controls, fallback si falta section, foco mejor
-  ✅ Toast queue: sticky + replace + tiempos custom
-  ✅ Format COP + parsers robustos + normalizador de inputs de dinero
-  ✅ Render eficiente (DocumentFragment) para tablas (dashboard/inventory/restock)
-  ✅ Modals: open/close con fallback si showModal falla
-  ✅ Inventario usable: Nombre (ID) con productsIndex(Map)
-  ✅ Restock Cart (🧺 Pedido a proveedor)
-     - badge configurable (items o unidades)
-     - tabla 5 cols: Producto | Cant | Costo | Subtotal | ✕
-     - print bonito (ventana nueva)
+  ui.js — Store UI Kernel (render + UX helpers) v4.3 PRO++
+  -----------------------------------------------------------------------------
+  Mejoras vs v4.2:
+  ✅ TAB_IDS auto-detect (no asume tabs que no existen, ej. restock)
+  ✅ fmtCOP con formatter cache (menos overhead)
+  ✅ setView NO pisa el hidden del botón Restock (eso lo maneja Auth)
+  ✅ Render más seguro: helper row builder + menos innerHTML donde no hace falta
+  ✅ Mejor parsing de datalist (toma ID del paréntesis o del final)
+  ✅ Toast: evita mensajes vacíos, mejor replace
+  ✅ Restock render: tolera items sin id (no rompe UI)
 ============================================================================= */
 
 export function createUI(opts = {}) {
@@ -22,10 +19,24 @@ export function createUI(opts = {}) {
   ========================= */
   const $ = (id) => document.getElementById(id);
   const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
-  const on = (node, ev, fn, opts2) => node && node.addEventListener(ev, fn, opts2);
-
   const qs = (sel, ctx = document) => ctx.querySelector(sel);
   const qsa = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
+
+  const on = (node, ev, fn, opts2) => node && node.addEventListener(ev, fn, opts2);
+
+  // Delegación de eventos (mejor para tablas y botones dinámicos)
+  function onDelegate(root, ev, selector, handler, opts2) {
+    if (!root || !selector || typeof handler !== 'function') return () => {};
+    const listener = (e) => {
+      const t = e?.target;
+      if (!t) return;
+      const hit = t.closest(selector);
+      if (!hit || !root.contains(hit)) return;
+      handler(e, hit);
+    };
+    root.addEventListener(ev, listener, opts2);
+    return () => root.removeEventListener(ev, listener, opts2);
+  }
 
   const setText = (node, text) => { if (node) node.textContent = String(text ?? ''); };
   const setHTML = (node, html) => { if (node) node.innerHTML = String(html ?? ''); };
@@ -138,7 +149,7 @@ export function createUI(opts = {}) {
     tabSales: $('tab-sales'),
     tabMoves: $('tab-moves'),
     tabDashboard: $('tab-dashboard'),
-    tabRestock: $('tab-restock'), // opcional si existe
+    tabRestock: $('tab-restock'),
 
     // ✅ Restock
     btnRestockOpen: $('btnRestockOpen'),
@@ -155,21 +166,29 @@ export function createUI(opts = {}) {
   };
 
   /* =========================
-     Tabs config (robusto)
-  ========================= */
-  const TAB_IDS = Array.isArray(opts.tabIds) && opts.tabIds.length
-    ? opts.tabIds.slice()
-    : ['catalog', 'inventory', 'sales', 'moves', 'dashboard', 'restock']; // incluye restock por si existe
-
-  function tabSectionId_(name) { return `tab-${name}`; }
-  function tabSectionEl_(name) { return $(tabSectionId_(name)); }
-
-  /* =========================
      Soft validation (no drama)
   ========================= */
   const _required = ['netLabel', 'netPill'];
   const missing = _required.filter(k => !el[k]);
   if (missing.length) console.warn('[UI] Faltan elementos DOM:', missing.join(', '));
+
+  /* =========================
+     Tabs config (robusto)
+  ========================= */
+  const autoTabsFromDOM = () => {
+    const names = (el.tabs || [])
+      .map(b => String(b?.dataset?.tab || '').trim())
+      .filter(Boolean);
+    // dedupe
+    return Array.from(new Set(names));
+  };
+
+  const TAB_IDS = Array.isArray(opts.tabIds) && opts.tabIds.length
+    ? opts.tabIds.slice()
+    : autoTabsFromDOM();
+
+  function tabSectionId_(name) { return `tab-${name}`; }
+  function tabSectionEl_(name) { return $(tabSectionId_(name)); }
 
   /* =========================
      Utils
@@ -202,26 +221,33 @@ export function createUI(opts = {}) {
     return Number.isFinite(n) ? n : 0;
   };
 
-  const fmtCOP = (n) => {
+  const UI_LOCALE = String(opts.locale || 'es-CO');
+  const UI_CURRENCY = String(opts.currency || 'COP');
+
+  let _fmtCOP = null;
+  function fmtCOP(n) {
     const v = Number.isFinite(n) ? n : toInt(n);
     try {
-      return new Intl.NumberFormat('es-CO', {
-        style: 'currency',
-        currency: 'COP',
-        maximumFractionDigits: 0,
-      }).format(v);
+      if (!_fmtCOP) {
+        _fmtCOP = new Intl.NumberFormat(UI_LOCALE, {
+          style: 'currency',
+          currency: UI_CURRENCY,
+          maximumFractionDigits: 0,
+        });
+      }
+      return _fmtCOP.format(v);
     } catch {
       return '$' + String(Math.round(v));
     }
-  };
+  }
 
   const truthy_ = (v) => {
     if (typeof v === 'boolean') return v;
     if (typeof v === 'number') return v !== 0;
     if (typeof v === 'string') {
       const s = v.trim().toLowerCase();
-      if (['1','true','yes','y','on','si','sí'].includes(s)) return true;
-      if (['0','false','no','n','off'].includes(s)) return false;
+      if (['1', 'true', 'yes', 'y', 'on', 'si', 'sí'].includes(s)) return true;
+      if (['0', 'false', 'no', 'n', 'off'].includes(s)) return false;
     }
     return !!v;
   };
@@ -245,35 +271,43 @@ export function createUI(opts = {}) {
   }
 
   // Normaliza un input de dinero (COP) a entero (sin decimales)
-  function moneyInputNormalize(inputEl) {
+  function moneyInputNormalize(inputEl, { format = false } = {}) {
     if (!inputEl) return 0;
-    const n = toInt(inputEl.value);
-    inputEl.value = String(n);
+    const n = Math.max(0, toInt(inputEl.value));
+    inputEl.value = format ? String(n) : String(n);
     return n;
   }
 
-  // Para datalist: "Nombre — Marca (ID)" o "(ID)" o "ID"
+  // Para datalist: "Nombre — Marca (ID)" -> ID, o "... (ID)" -> ID, o último token alfanumérico
   function parseDatalistProductId(raw) {
     const s = String(raw || '').trim();
     if (!s) return '';
     const m = s.match(/\(([^)]+)\)\s*$/);
     if (m && m[1]) return String(m[1]).trim();
-    // fallback: si pusieron "ID · Nombre"
-    const cut = s.split('·')[0].trim();
-    if (/^[a-z0-9\-_]+$/i.test(cut)) return cut;
+
+    // Si termina con algo tipo " P123" o "SKU123", lo toma si parece ID
+    const tail = s.split(/\s+/).slice(-1)[0] || '';
+    if (/^[a-z0-9][a-z0-9\-_]{1,80}$/i.test(tail)) return tail;
+
+    // fallback: antes del primer "—"
+    const cut = s.split('—')[0].trim();
+    if (/^[a-z0-9][a-z0-9\-_]{1,80}$/i.test(cut)) return cut;
+
     return '';
   }
 
   /* =========================
-     Toast (cola + sticky + replace)
+     Toast (cola + sticky + replace + pause hover)
   ========================= */
-  const TOAST = { q: [], showing: false };
+  const TOAST = { q: [], showing: false, paused: false };
 
   function toast(msg, ok = true, opts2 = {}) {
     if (!el.toast) return;
+    const m = String(msg || '').trim();
+    if (!m) return;
 
     const item = {
-      msg: String(msg || ''),
+      msg: m,
       ok: !!ok,
       sticky: !!opts2.sticky,
       ms: Number.isFinite(opts2.ms) ? opts2.ms : 2400,
@@ -286,8 +320,27 @@ export function createUI(opts = {}) {
     if (!TOAST.showing) drainToast_();
   }
 
+  function _toastAttachPause_() {
+    if (!el.toast) return;
+    if (el.toast.dataset.pauseBound === '1') return;
+    el.toast.dataset.pauseBound = '1';
+
+    on(el.toast, 'mouseenter', () => { TOAST.paused = true; });
+    on(el.toast, 'mouseleave', () => { TOAST.paused = false; });
+
+    // click = dismiss
+    on(el.toast, 'click', () => {
+      el.toast.hidden = true;
+      clearTimeout(drainToast_._t);
+      TOAST.paused = false;
+      drainToast_();
+    });
+  }
+
   function drainToast_() {
     if (!el.toast) return;
+
+    _toastAttachPause_();
 
     const next = TOAST.q.shift();
     if (!next) {
@@ -301,12 +354,25 @@ export function createUI(opts = {}) {
     el.toast.classList.toggle('is-bad', !next.ok);
 
     clearTimeout(drainToast_._t);
-    const ms = next.sticky ? 8000 : next.ms;
 
-    drainToast_._t = setTimeout(() => {
-      el.toast.hidden = true;
-      drainToast_();
-    }, ms);
+    const ttl = next.sticky ? 8000 : next.ms;
+    const startedAt = Date.now();
+
+    const tick = () => {
+      if (TOAST.paused) {
+        drainToast_._t = setTimeout(tick, 180);
+        return;
+      }
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= ttl) {
+        el.toast.hidden = true;
+        drainToast_();
+        return;
+      }
+      drainToast_._t = setTimeout(tick, 180);
+    };
+
+    drainToast_._t = setTimeout(tick, 180);
   }
 
   /* =========================
@@ -314,12 +380,13 @@ export function createUI(opts = {}) {
   ========================= */
   function setView(name) {
     document.body.dataset.view = name;
+
     if (el.viewLoading) el.viewLoading.hidden = (name !== 'loading');
     if (el.viewAuth) el.viewAuth.hidden = (name !== 'auth');
     if (el.viewApp) el.viewApp.hidden = (name !== 'app');
 
-    // Restock button solo visible en app (si existe)
-    if (el.btnRestockOpen) el.btnRestockOpen.hidden = (name !== 'app');
+    // NOTA: NO tocar el.hidden de btnRestockOpen acá.
+    // Ese botón depende de Auth (lo haces en index.html con onAuthStateChanged)
   }
 
   function setNet(ok, label) {
@@ -364,16 +431,36 @@ export function createUI(opts = {}) {
       btn.setAttribute('role', 'tab');
       btn.setAttribute('aria-controls', tabSectionId_(name));
       btn.setAttribute('tabindex', '-1');
+      btn.setAttribute('aria-selected', 'false');
     });
 
     const tablist = el.tabs[0]?.parentElement;
     if (tablist) tablist.setAttribute('role', 'tablist');
+
+    // teclado: ← → Home End
+    on(tablist, 'keydown', (e) => {
+      const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+      if (!keys.includes(e.key)) return;
+
+      const tabs = el.tabs.filter(Boolean);
+      const cur = document.activeElement;
+      const i = Math.max(0, tabs.indexOf(cur));
+      let nx = i;
+
+      if (e.key === 'ArrowLeft') nx = (i - 1 + tabs.length) % tabs.length;
+      if (e.key === 'ArrowRight') nx = (i + 1) % tabs.length;
+      if (e.key === 'Home') nx = 0;
+      if (e.key === 'End') nx = tabs.length - 1;
+
+      e.preventDefault();
+      try { tabs[nx]?.focus?.(); } catch {}
+    });
   }
 
   function showTab(tabName) {
-    const name = TAB_IDS.includes(tabName) ? tabName : TAB_IDS[0];
+    const fallback = TAB_IDS[0] || (el.tabs?.[0]?.dataset?.tab) || 'catalog';
+    const name = TAB_IDS.includes(tabName) ? tabName : fallback;
 
-    // buttons
     if (Array.isArray(el.tabs) && el.tabs.length) {
       el.tabs.forEach((btn) => {
         const t = btn?.dataset?.tab;
@@ -385,13 +472,11 @@ export function createUI(opts = {}) {
       });
     }
 
-    // sections
     TAB_IDS.forEach((n) => {
       const sec = tabSectionEl_(n);
       if (sec) sec.hidden = (n !== name);
     });
 
-    // focus first control
     const sec = tabSectionEl_(name);
     if (sec) {
       const first = sec.querySelector('input, select, textarea, button');
@@ -432,7 +517,7 @@ export function createUI(opts = {}) {
       const tr = document.createElement('tr');
 
       const td1 = document.createElement('td');
-      td1.innerHTML = escapeHtml(r.name || r.id);
+      td1.textContent = String(r.name || r.id || '');
 
       const td2 = document.createElement('td');
       td2.className = 'num mono';
@@ -477,6 +562,7 @@ export function createUI(opts = {}) {
       return;
     }
 
+    // Aquí usamos innerHTML por performance (tabla grande), pero TODO va escapado.
     el.catalogBody.innerHTML = list.map(p => {
       const active = truthy_(p.active ?? true);
       const badge = active
@@ -507,10 +593,10 @@ export function createUI(opts = {}) {
           </td>
           <td>${escapeHtml(p.brand || '')}</td>
           <td>${escapeHtml(p.category || '')}</td>
-          <td class="num mono">${fmtCOP(price)}</td>
+          <td class="num mono">${escapeHtml(fmtCOP(price))}</td>
           <td class="num mono">${toInt(stock)} ${stockBadge}</td>
           <td>${badge}</td>
-          <td class="num">
+          <td class="num" style="white-space:nowrap;">
             <button class="btn btn--tiny btn--ghost" data-act="edit" data-id="${escapeHtml(p.id)}">Editar</button>
             <button class="btn btn--tiny btn--ghost" data-act="toggle" data-id="${escapeHtml(p.id)}" data-active="${active ? '1' : '0'}">
               ${active ? 'Ocultar' : 'Activar'}
@@ -582,11 +668,11 @@ export function createUI(opts = {}) {
       td3.textContent = String(toInt(r.min_stock));
 
       const td4 = document.createElement('td');
-      td4.innerHTML = escapeHtml(r.location || '');
+      td4.textContent = String(r.location || '');
 
       const td5 = document.createElement('td');
       td5.className = 'tiny muted';
-      td5.innerHTML = escapeHtml(String(r.updated_at || ''));
+      td5.textContent = String(r.updated_at || '');
 
       tr.appendChild(td1);
       tr.appendChild(td2);
@@ -631,7 +717,7 @@ export function createUI(opts = {}) {
           <td class="num mono">
             <input class="miniNum" type="number" min="0" step="1" value="${unit}" data-sale-price="${idx}" />
           </td>
-          <td class="num mono">${fmtCOP(subtotal)}</td>
+          <td class="num mono">${escapeHtml(fmtCOP(subtotal))}</td>
           <td class="num">
             <button class="btn btn--tiny btn--ghost" data-sale-del="${idx}" title="Quitar">✕</button>
           </td>
@@ -646,11 +732,10 @@ export function createUI(opts = {}) {
     if (!el.saleProductsList) return;
     const list = Array.isArray(products) ? products : [];
 
-    // Mejor UX: "Nombre — Marca (ID)"
     el.saleProductsList.innerHTML = list
       .filter(p => truthy_(p?.active ?? true))
       .slice()
-      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), UI_LOCALE))
       .map(p => {
         const id = String(p.id || '').trim();
         const name = String(p.name || '').trim() || id;
@@ -694,7 +779,7 @@ export function createUI(opts = {}) {
         <tr>
           <td class="tiny">${date}</td>
           <td>${customer}</td>
-          <td class="num mono">${total}</td>
+          <td class="num mono">${escapeHtml(total)}</td>
           <td class="tiny">${notes}</td>
           <td class="num" style="white-space:nowrap;">
             <button class="btn btn--tiny btn--ghost" data-order-open="${id}">Abrir</button>
@@ -740,7 +825,7 @@ export function createUI(opts = {}) {
           <td class="mono">${id}</td>
           <td>${prod}</td>
           <td>${type}</td>
-          <td class="num mono">${qty}</td>
+          <td class="num mono">${escapeHtml(qty)}</td>
           <td class="tiny">${ref}</td>
           <td class="tiny">${date}</td>
         </tr>
@@ -754,9 +839,10 @@ export function createUI(opts = {}) {
   function _safeShowModal(dlg) {
     try {
       if (dlg && typeof dlg.showModal === 'function') dlg.showModal();
+      else dlg?.setAttribute?.('open', '');
     } catch (e) {
       console.warn('[UI] showModal falló:', e?.message || e);
-      try { dlg?.setAttribute('open', ''); } catch {}
+      try { dlg?.setAttribute?.('open', ''); } catch {}
     }
   }
 
@@ -767,6 +853,26 @@ export function createUI(opts = {}) {
     } catch {}
   }
 
+  // opcional: click fuera del modal para cerrar (cuando es <dialog>)
+  function enableDialogBackdropClose(dialogEl, shouldCloseFn = null) {
+    if (!dialogEl) return () => {};
+    const handler = (e) => {
+      try {
+        if (typeof dialogEl.close !== 'function') return;
+        const rect = dialogEl.getBoundingClientRect();
+        const inDialog = (
+          e.clientX >= rect.left && e.clientX <= rect.right &&
+          e.clientY >= rect.top && e.clientY <= rect.bottom
+        );
+        if (inDialog) return;
+        if (typeof shouldCloseFn === 'function' && !shouldCloseFn()) return;
+        dialogEl.close();
+      } catch {}
+    };
+    on(dialogEl, 'click', handler);
+    return () => dialogEl.removeEventListener('click', handler);
+  }
+
   /* =========================
      Product modal
   ========================= */
@@ -774,7 +880,6 @@ export function createUI(opts = {}) {
     const isNew = !p;
     if (el.productTitle) el.productTitle.textContent = isNew ? 'Nuevo producto' : 'Editar producto';
 
-    // UX: ID readonly si edit
     if (el.p_id) {
       el.p_id.value = p?.id || '';
       el.p_id.disabled = !isNew && !!(p?.id);
@@ -789,7 +894,7 @@ export function createUI(opts = {}) {
     if (el.p_price) el.p_price.value = String(pickPriceCOP_(p));
     if (el.p_cost) el.p_cost.value = String(pickCostCOP_(p));
     if (el.p_margin) el.p_margin.value = String(pickMargin_(p) || '');
-    if (el.p_desc) el.p_desc.value = p?.desc || '';
+    if (el.p_desc) el.p_desc.value = p?.desc || p?.descripcion || '';
     if (el.p_image) el.p_image.value = p?.image_url || '';
 
     _safeShowModal(el.modalProduct);
@@ -802,11 +907,10 @@ export function createUI(opts = {}) {
     const id = safeStr(el.p_id?.value, 80).trim();
     const name = safeStr(el.p_name?.value, 220).trim();
 
-    const cost = toInt(el.p_cost?.value);
+    const cost = Math.max(0, toInt(el.p_cost?.value));
     const margin = toFloat(el.p_margin?.value);
 
-    // precio: manual o calculado (si no hay)
-    const priceManual = toInt(el.p_price?.value);
+    const priceManual = Math.max(0, toInt(el.p_price?.value));
     const computedPrice = (priceManual > 0)
       ? priceManual
       : Math.round(cost * (1 + Math.max(0, margin) / 100));
@@ -883,6 +987,7 @@ export function createUI(opts = {}) {
 
   function _restockItemId_(it) { return String(it?.id || it?.product_id || it?.pid || '').trim(); }
   function _restockItemName_(it) { return String(it?.name || it?.product_name || it?.nombre || _restockItemId_(it) || '—'); }
+  function _restockItemDesc_(it) { return String(it?.desc || it?.description || it?.descripcion || '').trim(); }
   function _restockItemCost_(it) { return Math.max(0, toInt(it?.cost_cop ?? it?.cost ?? it?.costo_cop ?? it?.costo ?? it?.unit_cost)); }
 
   function renderRestock(cart) {
@@ -908,9 +1013,11 @@ export function createUI(opts = {}) {
 
     const frag = document.createDocumentFragment();
 
-    items.forEach((it) => {
-      const pid = _restockItemId_(it);
+    items.forEach((it, idx) => {
+      const pidRaw = _restockItemId_(it);
+      const pid = pidRaw || `__noid_${idx}`; // si viene sin id, no explota la UI
       const name = _restockItemName_(it);
+      const desc = _restockItemDesc_(it);
       const qty = Math.max(0, toInt(it?.qty));
       const cost = _restockItemCost_(it);
 
@@ -922,7 +1029,8 @@ export function createUI(opts = {}) {
       const td1 = document.createElement('td');
       td1.innerHTML =
         `<div class="cellTitle">${escapeHtml(name)}</div>` +
-        `<div class="cellSub muted tiny mono">${escapeHtml(pid || '—')}</div>`;
+        (desc ? `<div class="cellSub muted tiny">${escapeHtml(desc)}</div>` : ``) +
+        `<div class="cellSub muted tiny mono">${escapeHtml(pidRaw || '—')}</div>`;
 
       const td2 = document.createElement('td');
       td2.className = 'num mono';
@@ -974,6 +1082,7 @@ export function createUI(opts = {}) {
     const rowsHtml = items.map((it) => {
       const pid = _restockItemId_(it);
       const name = escapeHtml(_restockItemName_(it));
+      const desc = escapeHtml(_restockItemDesc_(it));
       const qty = Math.max(0, toInt(it?.qty));
       const cost = _restockItemCost_(it);
       totalUnits += qty;
@@ -983,6 +1092,7 @@ export function createUI(opts = {}) {
         <tr>
           <td>
             <div style="font-weight:700;">${name}</div>
+            ${desc ? `<div style="color:#586079; font-size:12px;">${desc}</div>` : ``}
             <div style="color:#667; font-size:12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">
               ${escapeHtml(pid || '—')}
             </div>
@@ -1118,7 +1228,7 @@ export function createUI(opts = {}) {
     el,
 
     // primitives
-    on, $, $$, qs, qsa, debounce,
+    on, onDelegate, $, $$, qs, qsa, debounce,
     setText, setHTML,
 
     // ui
@@ -1132,6 +1242,7 @@ export function createUI(opts = {}) {
     showTab,
     setBusy,
     lockModalCancel,
+    enableDialogBackdropClose,
 
     // utils
     fmtCOP,

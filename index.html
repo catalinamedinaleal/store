@@ -27,13 +27,15 @@
   <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
 
-  <!-- CSP (light-tight, pero compatible con inline scripts actuales) -->
+  <!-- CSP (segura sin romper módulos; inline permitido porque hay inline scripts) -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     base-uri 'self';
     object-src 'none';
     form-action 'self';
     frame-ancestors 'self';
+    upgrade-insecure-requests;
+    block-all-mixed-content;
 
     script-src
       'self'
@@ -65,7 +67,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-02-12.3";
+    window.__BUILD__ = "2026-02-26.1";
   </script>
 
   <!-- CSS -->
@@ -84,7 +86,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 
-  <!-- Micro estilos SOLO para Restock (mantener mínimo aquí; lo grande va en styles.css) -->
+  <!-- Micro estilos SOLO para Restock + Sort headers (mantener mínimo aquí; lo grande va en styles.css) -->
   <style>
     .restockBtn{
       position: relative;
@@ -121,6 +123,7 @@
     .restockBadge[hidden]{ display:none !important; }
 
     .restockGrid{ display:grid; grid-template-columns: 1fr; gap: 12px; }
+
     .restockTotals{
       display:flex;
       align-items:center;
@@ -131,15 +134,49 @@
       border-radius: 14px;
       background: rgba(255,255,255,.6);
     }
-    .restockTotals .mono{ font-variant-numeric: tabular-nums; }
-    .miniNum{
-      width: 84px;
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid rgba(11,16,32,.12);
-      background: rgba(255,255,255,.86);
+
+    /* Sort headers (flechitas por columna) */
+    .thSort{
+      display:inline-flex;
+      align-items:center;
+      gap: 8px;
+      border:0;
+      background: transparent;
+      padding: 0;
+      font: inherit;
+      color: inherit;
+      cursor: pointer;
+      user-select:none;
+    }
+    .thSort:focus{
+      outline: 2px solid rgba(12,65,196,.28);
+      outline-offset: 3px;
+      border-radius: 10px;
+    }
+    .thSortIcon{
+      width: 14px;
+      height: 14px;
+      display:inline-grid;
+      place-items:center;
+      border-radius: 8px;
+      color: rgba(11,16,32,.55);
+      font-size: 12px;
+      line-height: 1;
+    }
+    th[data-sort-active="true"] .thSortIcon{
+      color: rgba(12,65,196,.95);
+    }
+
+    .sr-only{
+      position:absolute !important;
+      width:1px !important;
+      height:1px !important;
+      padding:0 !important;
+      margin:-1px !important;
+      overflow:hidden !important;
+      clip:rect(0,0,0,0) !important;
+      white-space:nowrap !important;
+      border:0 !important;
     }
 
     @media print{
@@ -206,6 +243,7 @@
         <div class="spinner" aria-hidden="true"></div>
         <h1 class="h1">Cargando Store…</h1>
         <p class="muted">Validando sesión y preparando datos.</p>
+        <p class="tiny muted" style="margin-top:10px;">Build: <span class="mono" id="buildTopHint">—</span></p>
       </div>
     </section>
 
@@ -214,7 +252,7 @@
       <div class="auth">
         <div class="card auth__card">
           <h1 class="h1">Iniciar sesión</h1>
-          <p class="muted">Acceso interno. Si no estás en la lista, no entras. Así es la vida.</p>
+          <p class="muted">Acceso interno. Si no estás en la lista, no entras.</p>
 
           <form id="loginForm" class="form" autocomplete="on" novalidate>
             <label class="field">
@@ -261,7 +299,7 @@
             <li>🧠 Auditoría: movimientos de inventario</li>
             <li>🧺 Restock: pedido a proveedor descargable en PDF</li>
           </ul>
-          <p class="muted tiny">Todo se guarda en Sheets, con historial real. Nada de “se me perdió stock” 👀.</p>
+          <p class="muted tiny">Todo se guarda en Sheets, con historial real.</p>
         </div>
       </div>
     </section>
@@ -299,7 +337,7 @@
         <button class="tab" data-tab="moves" type="button" aria-selected="false">Movimientos</button>
         <button class="tab" data-tab="dashboard" type="button" aria-selected="false">Dashboard</button>
         <div class="tabs__spacer"></div>
-        <button class="btn btn--ghost" id="btnRefresh" type="button">Actualizar</button>
+        <button class="btn btn--ghost" id="btnRefresh" type="button" title="Recargar datos">Actualizar</button>
       </nav>
 
       <!-- TAB: Catalog -->
@@ -307,10 +345,12 @@
         <div class="card__head">
           <div>
             <h2 class="h2">Catálogo</h2>
-            <p class="muted tiny">Buscar, editar y activar/desactivar productos.</p>
+            <p class="muted tiny">Buscar, ordenar, editar y activar/desactivar productos.</p>
           </div>
-          <div class="card__actions">
-            <input class="input input--sm" id="qCatalog" type="text"
+
+          <div class="card__actions" aria-label="Acciones de catálogo" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+            <label class="sr-only" for="qCatalog">Buscar en catálogo</label>
+            <input class="input input--sm" id="qCatalog" type="search" autocomplete="off"
               placeholder="Buscar (nombre, marca, categoría, sku, stock)…" />
             <button class="btn btn--primary" id="btnNewProduct" type="button">Nuevo producto</button>
           </div>
@@ -320,13 +360,41 @@
           <table class="table" id="tblCatalog" aria-label="Tabla de productos">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Producto</th>
-                <th>Marca</th>
-                <th>Categoría</th>
-                <th class="num">Precio venta</th>
-                <th class="num">Stock</th>
-                <th>Estado</th>
+                <th data-sort-key="id">
+                  <button class="thSort" type="button" data-sort="id" aria-label="Ordenar por ID">
+                    <span>ID</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="name">
+                  <button class="thSort" type="button" data-sort="name" aria-label="Ordenar por Producto">
+                    <span>Producto</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="brand">
+                  <button class="thSort" type="button" data-sort="brand" aria-label="Ordenar por Marca">
+                    <span>Marca</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="category">
+                  <button class="thSort" type="button" data-sort="category" aria-label="Ordenar por Categoría">
+                    <span>Categoría</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th class="num" data-sort-key="price">
+                  <button class="thSort" type="button" data-sort="price" aria-label="Ordenar por Precio venta">
+                    <span>Precio venta</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th class="num" data-sort-key="stock">
+                  <button class="thSort" type="button" data-sort="stock" aria-label="Ordenar por Stock">
+                    <span>Stock</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="active">
+                  <button class="thSort" type="button" data-sort="active" aria-label="Ordenar por Estado">
+                    <span>Estado</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
                 <th class="num">Acciones</th>
               </tr>
             </thead>
@@ -342,10 +410,12 @@
         <div class="card__head">
           <div>
             <h2 class="h2">Inventario</h2>
-            <p class="muted tiny">Ajustes rápidos y alertas de mínimo.</p>
+            <p class="muted tiny">Ajustes rápidos, orden y alertas de mínimo.</p>
           </div>
-          <div class="card__actions">
-            <input class="input input--sm" id="qInventory" type="text" placeholder="Buscar por ID producto…" />
+
+          <div class="card__actions" aria-label="Acciones de inventario" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+            <label class="sr-only" for="qInventory">Buscar en inventario</label>
+            <input class="input input--sm" id="qInventory" type="search" autocomplete="off" placeholder="Buscar por ID producto…" />
             <button class="btn btn--primary" id="btnAdjustStock" type="button">Ajustar stock</button>
           </div>
         </div>
@@ -354,11 +424,31 @@
           <table class="table" id="tblInventory" aria-label="Tabla de inventario">
             <thead>
               <tr>
-                <th>Producto ID</th>
-                <th class="num">Stock</th>
-                <th class="num">Mínimo</th>
-                <th>Ubicación</th>
-                <th>Actualizado</th>
+                <th data-sort-key="product_id">
+                  <button class="thSort" type="button" data-sort="product_id" aria-label="Ordenar por Producto ID">
+                    <span>Producto ID</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th class="num" data-sort-key="stock">
+                  <button class="thSort" type="button" data-sort="stock" aria-label="Ordenar por Stock">
+                    <span>Stock</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th class="num" data-sort-key="min_stock">
+                  <button class="thSort" type="button" data-sort="min_stock" aria-label="Ordenar por Mínimo">
+                    <span>Mínimo</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="location">
+                  <button class="thSort" type="button" data-sort="location" aria-label="Ordenar por Ubicación">
+                    <span>Ubicación</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="updated_at">
+                  <button class="thSort" type="button" data-sort="updated_at" aria-label="Ordenar por Actualizado">
+                    <span>Actualizado</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody id="inventoryBody">
@@ -421,7 +511,7 @@
             <div class="saleCol card subcard">
               <h3 class="h3">Carrito</h3>
               <div class="row">
-                <input class="input input--sm" id="saleSearch" type="text" list="saleProductsList"
+                <input class="input input--sm" id="saleSearch" type="search" list="saleProductsList"
                   placeholder="Buscar producto (lista)…" autocomplete="off" />
                 <datalist id="saleProductsList"></datalist>
                 <button class="btn btn--ghost" id="btnAddToSale" type="button">Agregar</button>
@@ -500,21 +590,47 @@
             <h2 class="h2">Movimientos</h2>
             <p class="muted tiny">Auditoría: entradas, salidas, ajustes, ventas.</p>
           </div>
-          <div class="card__actions">
-            <input class="input input--sm" id="qMoves" type="text" placeholder="Filtrar por producto o ref…" />
+
+          <div class="card__actions" aria-label="Acciones de movimientos" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+            <label class="sr-only" for="qMoves">Filtrar movimientos</label>
+            <input class="input input--sm" id="qMoves" type="search" autocomplete="off" placeholder="Filtrar por producto o ref…" />
           </div>
         </div>
 
         <div class="tablewrap">
-          <table class="table table--compact" aria-label="Tabla de movimientos">
+          <table class="table table--compact" aria-label="Tabla de movimientos" id="tblMoves">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Producto</th>
-                <th>Tipo</th>
-                <th class="num">Cantidad</th>
-                <th>Referencia</th>
-                <th>Fecha</th>
+                <th data-sort-key="id">
+                  <button class="thSort" type="button" data-sort="moves_id" aria-label="Ordenar movimientos por ID">
+                    <span>ID</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="product">
+                  <button class="thSort" type="button" data-sort="moves_product" aria-label="Ordenar movimientos por Producto">
+                    <span>Producto</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="type">
+                  <button class="thSort" type="button" data-sort="moves_type" aria-label="Ordenar movimientos por Tipo">
+                    <span>Tipo</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th class="num" data-sort-key="qty">
+                  <button class="thSort" type="button" data-sort="moves_qty" aria-label="Ordenar movimientos por Cantidad">
+                    <span>Cantidad</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="ref">
+                  <button class="thSort" type="button" data-sort="moves_ref" aria-label="Ordenar movimientos por Referencia">
+                    <span>Referencia</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th data-sort-key="date">
+                  <button class="thSort" type="button" data-sort="moves_date" aria-label="Ordenar movimientos por Fecha">
+                    <span>Fecha</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody id="movesBody">
@@ -599,14 +715,13 @@
             <thead>
               <tr>
                 <th>Producto</th>
+                <th>Marca</th>
                 <th class="num">Cant.</th>
-                <th class="num">Costo</th>
-                <th class="num">Subtotal</th>
                 <th class="num">—</th>
               </tr>
             </thead>
             <tbody id="restockBody">
-              <tr><td colspan="5" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>
+              <tr><td colspan="4" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>
             </tbody>
           </table>
         </div>
@@ -617,8 +732,8 @@
             <div class="mono big" id="restockTotalUnits">0</div>
           </div>
           <div style="text-align:right;">
-            <div class="tiny muted">Total costo</div>
-            <div class="mono big" id="restockTotalCost">$0</div>
+            <div class="tiny muted">Borrador</div>
+            <div class="tiny muted">Se guarda automáticamente</div>
           </div>
         </div>
 
@@ -635,7 +750,7 @@
   </dialog>
 
   <!-- Modal: Product -->
-  <dialog class="modal" id="modalProduct">
+  <dialog class="modal" id="modalProduct" aria-label="Producto">
     <form method="dialog" class="modal__card" id="productForm">
       <div class="modal__head">
         <div>
@@ -714,7 +829,7 @@
   </dialog>
 
   <!-- Modal: Stock -->
-  <dialog class="modal" id="modalStock">
+  <dialog class="modal" id="modalStock" aria-label="Ajuste de inventario">
     <form method="dialog" class="modal__card" id="stockForm">
       <div class="modal__head">
         <div>
@@ -772,7 +887,11 @@
       API_BASE,
       CURRENCY: "COP",
       LOCALE: "es-CO",
-      BUILD: window.__BUILD__ || "2026-02-12.3",
+      BUILD: window.__BUILD__ || "2026-02-26.1",
+      API_TIMEOUT_MS: 25000,
+      API_FORCE_POST: true,
+      API_COALESCE: true,
+      API_JSONP_FALLBACK: false
     });
   </script>
 
@@ -788,11 +907,18 @@
       signOut
     } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
 
-    // UI hints (si existen)
+    // UI hints
+    const build = (window.STORE_CFG && window.STORE_CFG.BUILD) ? window.STORE_CFG.BUILD : "—";
+    const api = (window.STORE_CFG && window.STORE_CFG.API_BASE) ? window.STORE_CFG.API_BASE : "—";
+
     const buildHint = document.getElementById("buildHint");
-    if (buildHint) buildHint.textContent = (window.STORE_CFG && window.STORE_CFG.BUILD) ? window.STORE_CFG.BUILD : "—";
+    if (buildHint) buildHint.textContent = build;
+
+    const buildTopHint = document.getElementById("buildTopHint");
+    if (buildTopHint) buildTopHint.textContent = build;
+
     const apiHint = document.getElementById("apiHint");
-    if (apiHint) apiHint.textContent = (window.STORE_CFG && window.STORE_CFG.API_BASE) ? window.STORE_CFG.API_BASE : "—";
+    if (apiHint) apiHint.textContent = api;
 
     const firebaseConfig = Object.freeze({
       apiKey: "AIzaSyBm8RWGMxw9uz4iMmr0Chf3uiLzMY7TzOE",
@@ -819,12 +945,12 @@
       signOut
     });
 
-    // Airbag anti-typo legacy (si algo llama esto, no se muere todo)
+    // Airbag anti-typo legacy
     window.setsetViewSafe_ = window.setsetViewSafe_ || function(v){
       try { document.body.dataset.view = String(v || 'loading'); } catch {}
     };
 
-    // Mostrar/ocultar botón Restock + user pill según auth (independiente de app.js)
+    // Mostrar/ocultar botón Restock + user pill según auth
     const restockBtn = document.getElementById("btnRestockOpen");
     const userPill = document.getElementById("userPill");
     onAuthStateChanged(auth, (user) => {

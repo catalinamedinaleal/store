@@ -1,21 +1,25 @@
 'use strict';
 
 /* ============================================================================
-   api.js — Store API Client (CORS-proof for Apps Script) — PRO++ v6
-   ---------------------------------------------------------------------------
+   api.js — Store API Client (CORS-proof for Apps Script) — PRO++ v7.2
+   ----------------------------------------------------------------------------
    Objetivo:
    ✅ Obtener idToken desde Firebase
    ✅ Evitar CORS/preflight (NO Authorization header, NO custom headers)
-   ✅ Requests unificadas, robustas, con timeout
-   ✅ Errores consistentes (Apps Script + JSON/text)
-   ✅ Retry inteligente: si el token expiró, refresca 1 vez y reintenta
-   ✅ Shortcuts de endpoints (StoreAPI) incluyendo MOVIMIENTOS ✅
-   ✅ (Opcional) Anti-spam: coalesce requests iguales en vuelo
-   ✅ (Opcional) JSONP fallback (si tu backend lo soporta)
+   ✅ Requests unificadas, robustas, con timeout + retry auth 1 vez
+   ✅ Errores consistentes (Apps Script + JSON/text) + requestId
+   ✅ Coalesce requests iguales en vuelo (opcional)
+   ✅ JSONP fallback opcional (si tu backend lo soporta)
+   ✅ Helpers: loadAll, StoreAPI shortcuts (incluye MOVES ✅)
+   ✅ Debug: _meta con ms + via + requestId
 
    Requiere:
    - window.STORE_CFG.API_BASE   (URL del Web App /exec)
    - window.__FB__              (Firebase refs: auth)
+
+   Nota humana (qué oso):
+   - Para evitar preflight, NO enviamos headers custom. Fetch con body string ya
+     sale como text/plain por defecto.
 ============================================================================ */
 
 const CFG = window.STORE_CFG || {};
@@ -28,28 +32,21 @@ if (!FB || !FB.auth) console.warn('⚠️ Firebase no disponible en api.js (wind
 /* =========================
    Const / Config
 ========================= */
+const DEFAULT_TIMEOUT_MS = Number.isFinite(CFG.API_TIMEOUT_MS) ? CFG.API_TIMEOUT_MS : 25_000;
+const FORCE_POST = (CFG.API_FORCE_POST !== undefined) ? !!CFG.API_FORCE_POST : true;
 
-// Timeout para no quedarse colgado si Apps Script se queda pensando en su existencia
-const DEFAULT_TIMEOUT_MS = 25_000;
-
-// En Apps Script, lo más estable es POST always.
-const FORCE_POST = true;
-
-// (Opcional) Coalesce: si haces el mismo request (action+payload) varias veces en paralelo,
-// se resuelve con la misma promesa y reduces doble carga.
-const ENABLE_COALESCE = true;
+const ENABLE_COALESCE = (CFG.API_COALESCE !== undefined) ? !!CFG.API_COALESCE : true;
 const _inflight = new Map(); // key -> Promise
+
+const ENABLE_JSONP_FALLBACK = !!CFG.API_JSONP_FALLBACK;
 
 // Cache de token
 let _tokenCache = { token: '', expMs: 0 };
 
-// JSONP opcional (solo si lo activas desde opts o CFG)
-const ENABLE_JSONP_FALLBACK = !!CFG.API_JSONP_FALLBACK;
-
 /* =========================
    Errors
 ========================= */
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(message, extra = {}) {
     super(message || 'Error API');
     this.name = 'ApiError';
@@ -82,10 +79,10 @@ function isAbortError(err) {
 
 function normalizeApiError(data, fallbackMsg) {
   if (isObj(data)) {
-    if (typeof data.error === 'string' && data.error.trim()) return data.error.trim();
-    if (typeof data.message === 'string' && data.message.trim()) return data.message.trim();
-    if (typeof data.details === 'string' && data.details.trim()) return data.details.trim();
-    if (typeof data.msg === 'string' && data.msg.trim()) return data.msg.trim();
+    const candidates = [data.error, data.message, data.details, data.msg];
+    for (const c of candidates) {
+      if (typeof c === 'string' && c.trim()) return c.trim();
+    }
   }
   return fallbackMsg || 'Error desconocido API';
 }
@@ -96,14 +93,12 @@ function looksLikeAuthError(msg) {
     (s.includes('token') && (s.includes('expir') || s.includes('expired') || s.includes('invalid') || s.includes('invalido') || s.includes('venc'))) ||
     s.includes('unauthorized') || s.includes('no autorizado') ||
     s.includes('forbidden') || s.includes('permission') ||
-    s.includes('auth') && (s.includes('fail') || s.includes('error'))
+    (s.includes('auth') && (s.includes('fail') || s.includes('error')))
   );
 }
 
 function stableStringify(value) {
-  // stringify estable recursivo, sin ciclos (no mandes ciclos 🙃)
   const seen = new WeakSet();
-
   const walk = (v) => {
     if (v === null || v === undefined) return null;
     if (typeof v !== 'object') return v;
@@ -118,18 +113,18 @@ function stableStringify(value) {
     for (const k of keys) out[k] = walk(v[k]);
     return out;
   };
-
   return JSON.stringify(walk(value));
 }
 
 function makeCoalesceKey(action, payload, opts) {
   const t = Number.isFinite(opts?.timeoutMs) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
   const fr = !!opts?.forceRefreshToken;
-  return `${String(action)}|t=${t}|fr=${fr}|${stableStringify(isObj(payload) ? payload : {})}`;
+  const aj = !!opts?.allowJsonp;
+  const ar = (opts?.allowAuthRetry !== false);
+  return `${String(action)}|t=${t}|fr=${fr}|aj=${aj}|ar=${ar}|${stableStringify(isObj(payload) ? payload : {})}`;
 }
 
 function decodeJwtPayload(token) {
-  // No valida firma (no es necesario), solo saca exp si se puede.
   try {
     const parts = String(token || '').split('.');
     if (parts.length < 2) return null;
@@ -149,7 +144,7 @@ async function getToken({ forceRefresh = false } = {}) {
   const user = FB.auth?.currentUser;
   if (!user) throw new ApiError('No hay sesión activa', { code: 'NO_SESSION' });
 
-  // Si tenemos token y exp, úsalo si está vigente con un margen
+  // cache si aún sirve (con margen)
   if (!forceRefresh && _tokenCache.token && _tokenCache.expMs > nowMs()) {
     return _tokenCache.token;
   }
@@ -157,15 +152,14 @@ async function getToken({ forceRefresh = false } = {}) {
   const token = await user.getIdToken(!!forceRefresh);
   if (!token) throw new ApiError('No se pudo obtener token de sesión', { code: 'NO_TOKEN' });
 
-  // Cache basado en exp (si se puede), si no, cache corto
   const payload = decodeJwtPayload(token);
   if (payload?.exp) {
-    // exp viene en segundos
     const expMs = (Number(payload.exp) * 1000) - 30_000; // margen 30s
     _tokenCache = { token, expMs: Math.max(nowMs() + 10_000, expMs) };
   } else {
     _tokenCache = { token, expMs: nowMs() + 45_000 };
   }
+
   return token;
 }
 
@@ -197,7 +191,7 @@ async function readResponse(res) {
   const data = safeJsonParse(trimmed, null);
   if (data) return data;
 
-  // Si no es JSON, devolvemos "pseudo-json"
+  // Apps Script a veces devuelve HTML (error de deploy) o texto suelto
   return { ok: false, error: 'Respuesta inválida del servidor', raw: txt };
 }
 
@@ -208,18 +202,18 @@ function jsonpRequest(url, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const cbName = `__jsonp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const script = document.createElement('script');
+
     const timer = setTimeout(() => cleanup(new ApiError(`Timeout JSONP (${timeoutMs} ms)`, { code: 'TIMEOUT' })), timeoutMs);
 
     function cleanup(err, data) {
       clearTimeout(timer);
       try { delete window[cbName]; } catch {}
-      if (script && script.parentNode) script.parentNode.removeChild(script);
+      try { script?.parentNode?.removeChild(script); } catch {}
       if (err) reject(err);
       else resolve(data);
     }
 
     window[cbName] = (data) => cleanup(null, data);
-
     script.onerror = () => cleanup(new ApiError('Error cargando JSONP', { code: 'JSONP_ERROR' }));
     script.src = url + (url.includes('?') ? '&' : '?') + `callback=${encodeURIComponent(cbName)}`;
     document.head.appendChild(script);
@@ -233,7 +227,7 @@ function jsonpRequest(url, timeoutMs = DEFAULT_TIMEOUT_MS) {
  * request()
  * - Evita preflight: NO headers custom, NO content-type application/json forzado.
  * - Pasa token en el body: { token, action, ... }
- * - Usa POST siempre (recomendado para Apps Script).
+ * - POST por defecto (recomendado para Apps Script).
  *
  * Retorna el objeto "data" completo (incluye data.* que defina tu backend)
  */
@@ -259,10 +253,10 @@ async function request(action, payload = {}, opts = {}) {
 
     const started = nowMs();
 
-    // Normal: POST text/plain (sin headers)
     try {
       const res = await fetchWithTimeout(API_BASE, {
         method: 'POST',
+        // Sin headers para evitar preflight
         body: JSON.stringify(bodyObj),
       }, timeoutMs);
 
@@ -282,11 +276,16 @@ async function request(action, payload = {}, opts = {}) {
         );
       }
 
-      if (isObj(data) && !data._meta) data._meta = { requestId, ms: nowMs() - started };
+      if (isObj(data) && !data._meta) data._meta = {};
+      if (isObj(data)) {
+        data._meta.requestId = requestId;
+        data._meta.ms = nowMs() - started;
+        data._meta.via = 'post';
+      }
+
       return data;
 
     } catch (err) {
-      // Timeout / Abort
       if (isAbortError(err)) {
         throw new ApiError(`Timeout (${timeoutMs} ms) hablando con el servidor`, {
           code: 'TIMEOUT',
@@ -294,11 +293,8 @@ async function request(action, payload = {}, opts = {}) {
           meta: { timeoutMs }
         });
       }
-
-      // Si fue ApiError ya armado, lo devolvemos
       if (err instanceof ApiError) throw err;
 
-      // Fallback: error genérico
       throw new ApiError(String(err?.message || 'Error de red'), {
         code: 'NETWORK_ERROR',
         requestId
@@ -315,7 +311,6 @@ async function request(action, payload = {}, opts = {}) {
 
   const runner = (async () => {
     try {
-      // primer intento
       return await doOnce({ forceRefreshToken: !!opts.forceRefreshToken });
     } catch (err1) {
       // Retry de auth/token (1 vez)
@@ -328,16 +323,19 @@ async function request(action, payload = {}, opts = {}) {
       if (allowJsonp && (err1?.code === 'HTTP_ERROR' || err1?.code === 'NETWORK_ERROR' || err1?.code === 'TIMEOUT')) {
         try {
           const token = await getToken({ forceRefresh: false });
+
           const qs = new URLSearchParams();
           qs.set('action', String(action));
           qs.set('token', token);
           qs.set('requestId', requestId);
           qs.set('ts', String(nowMs()));
+
           const p = isObj(payload) ? payload : {};
           for (const [k, v] of Object.entries(p)) {
-            // JSONP via query, si el payload es grande, obvio se muere. No abuses.
+            // JSONP via query: payload grande = te explota en la cara. No abuses.
             qs.set(k, typeof v === 'string' ? v : stableStringify(v));
           }
+
           const url = API_BASE + (API_BASE.includes('?') ? '&' : '?') + qs.toString();
           const data = await jsonpRequest(url, timeoutMs);
 
@@ -348,10 +346,20 @@ async function request(action, payload = {}, opts = {}) {
               requestId
             });
           }
-          if (isObj(data) && !data._meta) data._meta = { requestId, ms: null, via: 'jsonp' };
+
+          if (isObj(data) && !data._meta) data._meta = {};
+          if (isObj(data)) {
+            data._meta.requestId = requestId;
+            data._meta.ms = null;
+            data._meta.via = 'jsonp';
+          }
+
           return data;
+
         } catch (err2) {
-          throw (err2 instanceof ApiError) ? err2 : new ApiError(String(err2?.message || 'Error JSONP'), { code: 'JSONP_ERROR', requestId });
+          throw (err2 instanceof ApiError)
+            ? err2
+            : new ApiError(String(err2?.message || 'Error JSONP'), { code: 'JSONP_ERROR', requestId });
         }
       }
 
@@ -394,14 +402,16 @@ export async function apiPost(payload = {}, opts = {}) {
 /**
  * loadAll:
  * - Helper para endpoints paginados por cursor
- * - Espera respuesta tipo: { ok:true, items:[...], cursor:"" }
+ * - Espera respuesta tipo: { ok:true, items:[...], cursor:"" } o { ok:true, data:{items,cursor} }
  */
 export async function loadAll(fnPage, { limit = 200, maxPages = 20, cursor = '' } = {}) {
   const all = [];
   let cur = String(cursor || '');
   for (let i = 0; i < maxPages; i++) {
     const res = await fnPage({ limit, cursor: cur });
-    const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res?.data?.items) ? res.data.items : []);
+    const items =
+      Array.isArray(res?.items) ? res.items :
+      (Array.isArray(res?.data?.items) ? res.data.items : []);
     all.push(...items);
 
     const next = String(res?.cursor || res?.data?.cursor || '').trim();

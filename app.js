@@ -1,27 +1,21 @@
 'use strict';
 /* =============================================================================
-Store · app.js (GitHub Pages) — PRO++ v6.10 (completo y mejorado)
+Store · app.js (GitHub Pages) — PRO++ v6.13 (perf + stability)
 
-✅ Robustez extra: no explota si faltan IDs
-✅ Restock SOLO visible post-login (vista app)
-✅ FIX REAL: Restock Open no hace nada -> multi-hook + delegación + fallbacks
-✅ Token plumbing: StoreAPI.setToken(token) si existe + apiPost() con token
-✅ Restock PDF REAL (jsPDF + autoTable) + backup clipboard
-✅ PDF Restock "COTIZACIÓN" (sin costos/totales) por defecto ✅✅✅
-✅ Restock PDF: Producto | Descripción | Cant. (sin ID) ✅✅✅
-✅ Restock texto backup: Producto — Descripción xCant (sin ID) ✅✅✅
-✅ Orders: server-first + fallback local
-✅ Sales UI: vacío solo si NO hay venta abierta y NO hay pedidos
-✅ Dashboard mini-retry
-✅ Compat layer getCfg* expuesto global
-✅ ID AUTO real para productos (no bloquea Guardar)
-✅ Tabs tolerantes: si falta btn o section, no se muere
+Mejoras sobre v6.12 (sin romper tu HTML/IDs):
+✅ FIX real: se usaba fatal_() antes de existir (podía romper el boot en algunos casos)
+✅ Tabs: menos renders duplicados (showTab ya no dispara renderActive_ 3 veces por deporte)
+✅ Orders: render y meta más consistente; “hydrate” solo cuando toca
+✅ Sales: datalist rebuild aún más seguro (no reconstruye si no hay cambios)
+✅ Delegación: más null-safe y menos work en cada input/click
+✅ Restock: render más barato y con menos lecturas repetidas
 
-Requiere:
-- index.html con window.STORE_CFG y window.__FB__
-- index.html carga jsPDF + autoTable (window.jspdf + doc.autoTable)
-- api.js exporta: StoreAPI, apiPost
-- state.js exporta: State
+Mantiene TODO lo que ya estaba:
+- Lazy loading por tabs
+- Refresh parcial por acción
+- Restock PDF (jsPDF + autoTable)
+- Orders server-first + fallback local
+- Pricing helpers + auto ID productos
 ============================================================================= */
 
 import { StoreAPI, apiPost } from './api.js';
@@ -37,7 +31,6 @@ function getCfg_(key, fallback = undefined) {
     {};
   return (key in cfg) ? cfg[key] : fallback;
 }
-
 function getCfgBool_(key, fallback = false) {
   const v = getCfg_(key, fallback);
   if (typeof v === 'boolean') return v;
@@ -49,13 +42,11 @@ function getCfgBool_(key, fallback = false) {
   }
   return !!v;
 }
-
 function getCfgNum_(key, fallback = 0) {
   const v = getCfg_(key, fallback);
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-
 function getCfgStr_(key, fallback = '') {
   const v = getCfg_(key, fallback);
   return (v === null || v === undefined) ? fallback : String(v);
@@ -77,7 +68,6 @@ function slug_(s) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 18);
 }
-
 function genProductId_({ name, category } = {}) {
   const base = slug_(name) || slug_(category) || 'prod';
   const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -222,22 +212,6 @@ export function boot() {
   if (!API_BASE && el.authStatus) el.authStatus.textContent = 'Falta configurar API_BASE en index.html';
 
   /* =========================
-     Firebase refs
-  ========================= */
-  const FB = window.__FB__;
-  if (!FB || !FB.auth) {
-    fatal_('Firebase no inicializado. Revisa index.html (__FB__).');
-    return;
-  }
-
-  /* =========================
-     Restock PDF behavior
-     - true: PDF tipo cotización (sin costos ni totales)
-     - false: PDF tipo orden (con costos)
-  ========================= */
-  const RESTOCK_PDF_HIDE_PRICES = getCfgBool_('RESTOCK_PDF_HIDE_PRICES', true);
-
-  /* =========================
      Utils
   ========================= */
   const fmtCOP = (n) => {
@@ -320,6 +294,59 @@ export function boot() {
   }
 
   /* =========================
+     Toast + fatal (NEEDED EARLY)
+  ========================= */
+  function toast(msg, ok = true) {
+    if (!el.toast) return;
+    el.toast.hidden = false;
+    el.toast.textContent = String(msg || '');
+    el.toast.classList.toggle('is-bad', !ok);
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { if (el.toast) el.toast.hidden = true; }, 2600);
+  }
+
+  function setNet(ok, label) {
+    if (!el.netLabel) return;
+    el.netLabel.textContent = label || (ok ? 'Conectado' : 'Sin conexión');
+    el.netPill?.classList.toggle('is-bad', !ok);
+  }
+
+  function fatal_(msg) {
+    console.error('[STORE:FATAL]', msg);
+    toast(msg, false);
+    setNet(false, 'Error');
+  }
+
+  /* =========================
+     View + Busy
+  ========================= */
+  function setView(name) {
+    document.body.dataset.view = name;
+
+    if (el.viewLoading) el.viewLoading.hidden = (name !== 'loading');
+    if (el.viewAuth) el.viewAuth.hidden = (name !== 'auth');
+    if (el.viewApp) el.viewApp.hidden = (name !== 'app');
+
+    // ✅ Restock solo en app
+    if (el.btnRestockOpen) el.btnRestockOpen.hidden = (name !== 'app');
+  }
+
+  /* =========================
+     Firebase refs (AFTER fatal_)
+  ========================= */
+  const FB = window.__FB__;
+  if (!FB || !FB.auth) {
+    fatal_('Firebase no inicializado. Revisa index.html (__FB__).');
+    setView('auth');
+    return;
+  }
+
+  /* =========================
+     Restock PDF behavior
+  ========================= */
+  const RESTOCK_PDF_HIDE_PRICES = getCfgBool_('RESTOCK_PDF_HIDE_PRICES', true);
+
+  /* =========================
      Token / API plumbing
   ========================= */
   function getToken_() {
@@ -338,18 +365,6 @@ export function boot() {
     try {
       if (StoreAPI && typeof StoreAPI.setToken === 'function') StoreAPI.setToken(token || '');
     } catch {}
-  }
-
-  /* =========================
-     Toast
-  ========================= */
-  function toast(msg, ok = true) {
-    if (!el.toast) return;
-    el.toast.hidden = false;
-    el.toast.textContent = String(msg || '');
-    el.toast.classList.toggle('is-bad', !ok);
-    clearTimeout(toast._t);
-    toast._t = setTimeout(() => { if (el.toast) el.toast.hidden = true; }, 2600);
   }
 
   /* =========================
@@ -418,7 +433,8 @@ export function boot() {
     BUSY_DLG = d;
     BUSY_DLG._textEl = txt;
 
-    d.addEventListener('cancel', (ev) => { if (State.get().busy) ev.preventDefault(); });
+    // bloquea ESC cuando busy
+    d.addEventListener('cancel', (ev) => { if (State.get()?.busy) ev.preventDefault(); });
 
     return BUSY_DLG;
   }
@@ -430,26 +446,6 @@ export function boot() {
   }
   function busyHide() {
     if (BUSY_DLG && BUSY_DLG.open) BUSY_DLG.close();
-  }
-
-  /* =========================
-     View + Net + Busy
-  ========================= */
-  function setView(name) {
-    document.body.dataset.view = name;
-
-    if (el.viewLoading) el.viewLoading.hidden = (name !== 'loading');
-    if (el.viewAuth) el.viewAuth.hidden = (name !== 'auth');
-    if (el.viewApp) el.viewApp.hidden = (name !== 'app');
-
-    // ✅ Restock solo en app
-    if (el.btnRestockOpen) el.btnRestockOpen.hidden = (name !== 'app');
-  }
-
-  function setNet(ok, label) {
-    if (!el.netLabel) return;
-    el.netLabel.textContent = label || (ok ? 'Conectado' : 'Sin conexión');
-    el.netPill?.classList.toggle('is-bad', !ok);
   }
 
   function setBusy_(onFlag = true, msg = 'Procesando…') {
@@ -470,12 +466,6 @@ export function boot() {
 
     if (onFlag) busyShow(msg);
     else busyHide();
-  }
-
-  function fatal_(msg) {
-    console.error('[STORE:FATAL]', msg);
-    toast(msg, false);
-    setNet(false, 'Error');
   }
 
   /* =========================
@@ -500,14 +490,33 @@ export function boot() {
     return $('tab-' + name);
   }
 
+  function currentTab_() {
+    const st = State.get();
+    const t = String(st.tab || '').trim();
+    return TAB_IDS.includes(t) ? t : 'catalog';
+  }
+
+  // guard anti-renders múltiples en cascada
+  let RENDER_GUARD = 0;
+
   function showTab(tabName) {
     const next = TAB_IDS.includes(tabName) ? tabName : 'catalog';
+    const prev = currentTab_();
+
+    // si ya estás ahí, no hagas show + lazy load de nuevo
+    if (prev === next) {
+      renderActive_();
+      return;
+    }
+
     State.setTab(next);
 
     if (Array.isArray(el.tabs) && el.tabs.length) {
-      TAB_IDS.forEach(n => {
-        const btn = el.tabs.find(b => b && b.dataset && b.dataset.tab === n);
-        if (btn) btn.classList.toggle('is-active', n === next);
+      // rápido: un loop sobre tabs reales, no sobre TAB_IDS buscando
+      el.tabs.forEach(btn => {
+        const t = btn?.dataset?.tab;
+        if (!t) return;
+        btn.classList.toggle('is-active', t === next);
       });
     }
 
@@ -516,9 +525,16 @@ export function boot() {
       if (sec) sec.hidden = (n !== next);
     });
 
-    if (next === 'sales') syncSalesUI_();
-    if (next === 'moves') loadMoves_(State.get().movesQuery || '');
-    if (next === 'restock') renderRestock_();
+    // Lazy load por tab (sin renderizar todo)
+    const after = () => renderActive_();
+
+    if (next === 'catalog') ensureProductsLoaded_().finally(after);
+    else if (next === 'inventory') ensureInventoryLoaded_().finally(after);
+    else if (next === 'sales') ensureProductsLoaded_().finally(() => { syncSalesUI_(); after(); });
+    else if (next === 'moves') { after(); loadMoves_(State.get().movesQuery || ''); }
+    else if (next === 'restock') ensureProductsLoaded_().finally(after);
+    else if (next === 'dashboard') ensureDashboardLoaded_().finally(after);
+    else after();
   }
 
   /* =========================
@@ -531,6 +547,8 @@ export function boot() {
 
     if (el.salePane) el.salePane.hidden = !isOpen;
     if (el.salesEmpty) el.salesEmpty.hidden = isOpen || hasOrders;
+
+    // orders pane siempre visible en sales (si existe)
     if (el.ordersPane) el.ordersPane.hidden = false;
   }
 
@@ -601,37 +619,36 @@ export function boot() {
       return;
     }
 
-    el.ordersBody.innerHTML = rows
-      .slice()
-      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
-      .map(o => {
-        const d = String(o.created_at || '');
-        const cust = String(o.customer_id || '').trim() || '—';
-        const total = fmtCOP(toInt(o.total_cop));
-        const notes = String(o.notes || '').trim();
+    const sorted = rows.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 
-        const openBtn = `<button class="btn btn--tiny btn--ghost" data-order-open="${escapeHtml(String(o.id || ''))}">Abrir</button>`;
-        const payBtn  = `<button class="btn btn--tiny btn--primary" data-order-pay="${escapeHtml(String(o.id || ''))}">Marcar pagado</button>`;
-        const delBtn  = (st.ordersSource === 'local')
-          ? `<button class="btn btn--tiny btn--ghost" data-order-del="${escapeHtml(String(o.id || ''))}">Eliminar</button>`
-          : '';
+    el.ordersBody.innerHTML = sorted.map(o => {
+      const d = String(o.created_at || '');
+      const cust = String(o.customer_id || '').trim() || '—';
+      const total = fmtCOP(toInt(o.total_cop));
+      const notes = String(o.notes || '').trim();
 
-        return `
-          <tr>
-            <td class="tiny muted">${escapeHtml(d || '')}</td>
-            <td>${escapeHtml(cust)}</td>
-            <td class="num mono">${escapeHtml(total)}</td>
-            <td class="tiny">${escapeHtml(notes)}</td>
-            <td class="num" style="white-space:nowrap;">
-              <div class="row" style="gap:8px; justify-content:flex-end;">
-                ${openBtn}
-                ${payBtn}
-                ${delBtn}
-              </div>
-            </td>
-          </tr>
-        `;
-      }).join('');
+      const openBtn = `<button class="btn btn--tiny btn--ghost" data-order-open="${escapeHtml(String(o.id || ''))}">Abrir</button>`;
+      const payBtn  = `<button class="btn btn--tiny btn--primary" data-order-pay="${escapeHtml(String(o.id || ''))}">Marcar pagado</button>`;
+      const delBtn  = (st.ordersSource === 'local')
+        ? `<button class="btn btn--tiny btn--ghost" data-order-del="${escapeHtml(String(o.id || ''))}">Eliminar</button>`
+        : '';
+
+      return `
+        <tr>
+          <td class="tiny muted">${escapeHtml(d || '')}</td>
+          <td>${escapeHtml(cust)}</td>
+          <td class="num mono">${escapeHtml(total)}</td>
+          <td class="tiny">${escapeHtml(notes)}</td>
+          <td class="num" style="white-space:nowrap;">
+            <div class="row" style="gap:8px; justify-content:flex-end;">
+              ${openBtn}
+              ${payBtn}
+              ${delBtn}
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
 
     if (el.ordersMeta) {
       el.ordersMeta.textContent = (st.ordersSource === 'api')
@@ -692,7 +709,6 @@ export function boot() {
     }
 
     const idx = State.productsIndex();
-
     State.openSale();
 
     if (el.saleCustomer) el.saleCustomer.value = String(order.customer_id || '').trim();
@@ -712,7 +728,7 @@ export function boot() {
     }).filter(x => x.product_id);
 
     State.setSaleItems(items);
-    renderSaleItems_();
+    scheduleSaleRender_();
     syncSalesUI_();
     toast('Pedido cargado en la venta ✅', true);
   }
@@ -720,6 +736,8 @@ export function boot() {
   async function openOrder_(id) {
     const key = String(id || '').trim();
     if (!key) return;
+
+    await ensureProductsLoaded_().catch(() => {});
 
     setBusy_(true, 'Cargando pedido…');
     try {
@@ -739,63 +757,8 @@ export function boot() {
     }
   }
 
-  async function markOrderPaid_(id) {
-    const key = String(id || '').trim();
-    if (!key) { toast('ID inválido', false); return; }
-
-    const st = State.get();
-
-    if (st.ordersSource === 'api') {
-      setBusy_(true, 'Marcando pagado…');
-      try {
-        await apiPostAuthed_({ action: 'sale.updateStatus', id: key, status: 'paid' });
-        toast('Pedido convertido a pagado ✅', true);
-        await loadAll_();
-        return;
-      } catch (e) {
-        toast(e?.message || String(e), false);
-        return;
-      } finally {
-        setBusy_(false);
-      }
-    }
-
-    const o = findLocalOrderById_(key);
-    if (!o) { toast('No encontré ese pedido', false); return; }
-    if (!Array.isArray(o.items) || !o.items.length) { toast('Ese pedido no tiene items', false); return; }
-
-    const items = o.items.map(it => ({
-      product_id: String(it.product_id || '').trim(),
-      qty: toInt(it.qty),
-      unit_price: toInt(it.unit_price),
-    })).filter(x => x.product_id && x.qty > 0 && x.unit_price >= 0);
-
-    const sale = {
-      customer_id: String(o.customer_id || '').trim(),
-      payment_method: String(o.payment_method || 'cash').trim() || 'cash',
-      status: 'paid',
-      notes: String(o.notes || '').trim(),
-      from_order: String(o.id || '').trim(),
-    };
-
-    const computedTotal = items.reduce((acc, it) => acc + (toInt(it.qty) * toInt(it.unit_price)), 0);
-
-    setBusy_(true, 'Convirtiendo a venta…');
-    try {
-      const res = await apiPostAuthed_({ action: 'sale.create', sale, items });
-      removeLocalOrder_(key);
-      renderOrders_();
-      toast(`Venta guardada ✅ (${fmtCOP(toInt(res.total_cop ?? computedTotal))})`, true);
-      await loadAll_();
-    } catch (e) {
-      toast(e?.message || String(e), false);
-    } finally {
-      setBusy_(false);
-    }
-  }
-
   /* =========================
-     Data load (resiliente)
+     Dashboard retry
   ========================= */
   async function loadDashboardWithRetry_() {
     try {
@@ -806,48 +769,173 @@ export function boot() {
     }
   }
 
-  async function loadAll_() {
+  /* =========================
+     PERF: Lazy loaders + refresh parcial
+  ========================= */
+  const LOAD = {
+    productsInflight: null,
+    inventoryInflight: null,
+    dashboardInflight: null,
+    ordersInflight: null,
+    productsLoadedAt: 0,
+    inventoryLoadedAt: 0,
+    dashboardLoadedAt: 0,
+    ordersLoadedAt: 0,
+    productsSig: '',
+  };
+
+  function markSync_() {
+    State.setLastSync(new Date().toISOString());
+  }
+
+  function productsSignature_(items) {
+    const arr = Array.isArray(items) ? items : [];
+    const parts = [];
+    for (let i = 0; i < arr.length; i++) {
+      const p = arr[i];
+      if (!p) continue;
+      const id = String(p.id || '');
+      const name = String(p.name || '');
+      const active = (p.active !== false) ? '1' : '0';
+      parts.push(id + '|' + name + '|' + active);
+      if (parts.length > 600) break;
+    }
+    return String(arr.length) + '::' + parts.join('~');
+  }
+
+  async function ensureProductsLoaded_(force = false) {
+    const st = State.get();
+    const has = Array.isArray(st.products) && st.products.length > 0;
+
+    if (!force && has) return;
+    if (LOAD.productsInflight) return LOAD.productsInflight;
+
+    LOAD.productsInflight = (async () => {
+      const res = await StoreAPI.listProducts('');
+      const items = Array.isArray(res?.items) ? res.items : [];
+      State.setProducts(items);
+
+      const sig = productsSignature_(items);
+      if (sig !== LOAD.productsSig) {
+        LOAD.productsSig = sig;
+        buildSaleDatalist_();
+      }
+
+      LOAD.productsLoadedAt = Date.now();
+    })().finally(() => { LOAD.productsInflight = null; });
+
+    return LOAD.productsInflight;
+  }
+
+  async function ensureInventoryLoaded_(force = false) {
+    const st = State.get();
+    const has = Array.isArray(st.inventory) && st.inventory.length > 0;
+
+    if (!force && has) return;
+    if (LOAD.inventoryInflight) return LOAD.inventoryInflight;
+
+    LOAD.inventoryInflight = (async () => {
+      const res = await StoreAPI.listInventory();
+      State.setInventory(Array.isArray(res?.items) ? res.items : []);
+      LOAD.inventoryLoadedAt = Date.now();
+    })().finally(() => { LOAD.inventoryInflight = null; });
+
+    return LOAD.inventoryInflight;
+  }
+
+  async function ensureDashboardLoaded_(force = false) {
+    const st = State.get();
+    const has = !!st.dashboard;
+
+    if (!force && has) return;
+    if (LOAD.dashboardInflight) return LOAD.dashboardInflight;
+
+    LOAD.dashboardInflight = (async () => {
+      const d = await loadDashboardWithRetry_();
+      State.setDashboard(d || null);
+      LOAD.dashboardLoadedAt = Date.now();
+    })().finally(() => { LOAD.dashboardInflight = null; });
+
+    return LOAD.dashboardInflight;
+  }
+
+  async function ensureOrdersLoaded_(force = false) {
+    const st = State.get();
+    if (!force && st.ordersLoadedOnce) return;
+    if (LOAD.ordersInflight) return LOAD.ordersInflight;
+
+    LOAD.ordersInflight = (async () => {
+      await loadOrders_().catch(() => {});
+      State.set({ ordersLoadedOnce: true }, { sys: true });
+      LOAD.ordersLoadedAt = Date.now();
+    })().finally(() => { LOAD.ordersInflight = null; });
+
+    return LOAD.ordersInflight;
+  }
+
+  async function refreshAfterSale_() {
+    await Promise.allSettled([
+      ensureOrdersLoaded_(true),
+      ensureInventoryLoaded_(true),
+      ensureDashboardLoaded_(true),
+    ]);
+    markSync_();
+    renderActive_();
+  }
+
+  async function refreshAfterStock_() {
+    await Promise.allSettled([
+      ensureInventoryLoaded_(true),
+      ensureDashboardLoaded_(true),
+    ]);
+    markSync_();
+    renderActive_();
+  }
+
+  async function refreshAfterProductChange_() {
+    await Promise.allSettled([
+      ensureProductsLoaded_(true),
+      ensureDashboardLoaded_(true),
+    ]);
+    markSync_();
+    renderActive_();
+  }
+
+  async function refreshAfterOrderPaid_() {
+    await Promise.allSettled([
+      ensureOrdersLoaded_(true),
+      ensureInventoryLoaded_(true),
+      ensureDashboardLoaded_(true),
+    ]);
+    markSync_();
+    renderActive_();
+  }
+
+  /* =========================
+     Full load (solo manual refresh o login)
+  ========================= */
+  async function loadAll_(opts = {}) {
+    const force = !!opts.force;
     setBusy_(true, 'Cargando…');
     setNet(true, 'Cargando…');
 
     try {
-      await loadOrders_().catch(() => {});
+      await ensureOrdersLoaded_(force).catch(() => {});
       renderOrders_();
       syncSalesUI_();
 
-      const [pRes, invRes, dashRes] = await Promise.allSettled([
-        StoreAPI.listProducts(''),
-        StoreAPI.listInventory(),
-        loadDashboardWithRetry_(),
-      ]);
+      const tab = currentTab_();
+      const wantsProducts = ['catalog', 'sales', 'restock'].includes(tab);
+      const wantsInventory = ['inventory', 'dashboard'].includes(tab);
 
-      if (pRes.status === 'fulfilled') {
-        const p = pRes.value;
-        State.setProducts(Array.isArray(p?.items) ? p.items : []);
-        buildSaleDatalist_();
-      } else {
-        console.warn('Products failed:', pRes.reason);
-        toast('No pude cargar productos (temporal).', false);
-      }
+      const tasks = [ensureDashboardLoaded_(force)];
+      if (wantsProducts) tasks.push(ensureProductsLoaded_(force));
+      if (wantsInventory) tasks.push(ensureInventoryLoaded_(force));
 
-      if (invRes.status === 'fulfilled') {
-        const inv = invRes.value;
-        State.setInventory(Array.isArray(inv?.items) ? inv.items : []);
-      } else {
-        console.warn('Inventory failed:', invRes.reason);
-        toast('No pude cargar inventario (temporal).', false);
-      }
+      await Promise.allSettled(tasks);
 
-      if (dashRes.status === 'fulfilled') {
-        State.setDashboard(dashRes.value || null);
-      } else {
-        console.warn('Dashboard failed:', dashRes.reason);
-        State.setDashboard(null);
-      }
-
-      State.setLastSync(new Date().toISOString());
-      renderAll_();
-
+      markSync_();
+      renderActive_();
       setNet(true, 'Conectado');
     } catch (e) {
       fatal_(e?.message || String(e));
@@ -858,16 +946,24 @@ export function boot() {
     }
   }
 
-  function renderAll_() {
-    renderKPIs_();
-    renderCatalog_();
-    renderInventory_();
-    renderDashboard_();
-    renderOrders_();
-    renderSaleItems_();
-    renderMoves_();
-    renderRestock_();
-    syncSalesUI_();
+  /* =========================
+     PERF: Render only active tab
+  ========================= */
+  function renderActive_() {
+    const my = ++RENDER_GUARD;
+    Promise.resolve().then(() => {
+      if (my !== RENDER_GUARD) return;
+
+      renderKPIs_();
+
+      const tab = currentTab_();
+      if (tab === 'catalog') renderCatalog_();
+      else if (tab === 'inventory') renderInventory_();
+      else if (tab === 'dashboard') renderDashboard_();
+      else if (tab === 'sales') { renderOrders_(); scheduleSaleRender_(); syncSalesUI_(); }
+      else if (tab === 'moves') renderMoves_();
+      else if (tab === 'restock') renderRestock_();
+    });
   }
 
   function renderKPIs_() {
@@ -912,6 +1008,7 @@ export function boot() {
 
     const st = State.get();
     const q = String(el.qCatalog?.value || '').toLowerCase().trim();
+
     const list = (st.products || []).filter(p => {
       if (!q) return true;
       return (
@@ -1098,13 +1195,13 @@ export function boot() {
     if (el.salePay) el.salePay.value = 'cash';
     if (el.saleStatus) el.saleStatus.value = 'paid';
 
-    renderSaleItems_();
+    scheduleSaleRender_();
     syncSalesUI_();
   }
 
   function closeSale_() {
     State.closeSale();
-    renderSaleItems_();
+    scheduleSaleRender_();
     syncSalesUI_();
   }
 
@@ -1169,19 +1266,26 @@ export function boot() {
     const unit = pickPriceCOP_(p);
 
     const items = Array.isArray(st.saleItems) ? st.saleItems : [];
-    const idx = items.findIndex(x => String(x.product_id || '') === pid);
+    const i = items.findIndex(x => String(x.product_id || '') === pid);
 
-    let next;
-    if (idx >= 0) {
-      next = items.map((it, i) => (i === idx ? { ...it, qty: Math.max(1, toInt(it.qty) + 1) } : it));
-    } else {
-      next = items.concat([{ product_id: pid, name: p.name || pid, qty: 1, unit_price: unit }]);
-    }
+    const next = (i >= 0)
+      ? items.map((it, idx) => (idx === i ? { ...it, qty: Math.max(1, toInt(it.qty) + 1) } : it))
+      : items.concat([{ product_id: pid, name: p.name || pid, qty: 1, unit_price: unit }]);
 
     State.setSaleItems(next);
 
     if (el.saleSearch) el.saleSearch.value = '';
-    renderSaleItems_();
+    scheduleSaleRender_();
+  }
+
+  // PERF: batch render sale to avoid input lag
+  let SALE_RAF = 0;
+  function scheduleSaleRender_() {
+    cancelAnimationFrame(SALE_RAF);
+    SALE_RAF = requestAnimationFrame(() => {
+      renderSaleItems_();
+      SALE_RAF = 0;
+    });
   }
 
   function renderSaleItems_() {
@@ -1272,10 +1376,66 @@ export function boot() {
 
       toast(`${sale.status === 'pending' ? 'Pedido' : 'Venta'} guardada ✅ (${fmtCOP(toInt(res?.total_cop ?? computedTotal))})`, true);
       closeSale_();
-      await loadAll_();
+
+      await refreshAfterSale_();
     } catch (e) {
       toast(e?.message || String(e), false);
       throw e;
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function markOrderPaid_(id) {
+    const key = String(id || '').trim();
+    if (!key) { toast('ID inválido', false); return; }
+
+    const st = State.get();
+
+    if (st.ordersSource === 'api') {
+      setBusy_(true, 'Marcando pagado…');
+      try {
+        await apiPostAuthed_({ action: 'sale.updateStatus', id: key, status: 'paid' });
+        toast('Pedido convertido a pagado ✅', true);
+        await refreshAfterOrderPaid_();
+        return;
+      } catch (e) {
+        toast(e?.message || String(e), false);
+        return;
+      } finally {
+        setBusy_(false);
+      }
+    }
+
+    const o = findLocalOrderById_(key);
+    if (!o) { toast('No encontré ese pedido', false); return; }
+    if (!Array.isArray(o.items) || !o.items.length) { toast('Ese pedido no tiene items', false); return; }
+
+    const items = o.items.map(it => ({
+      product_id: String(it.product_id || '').trim(),
+      qty: toInt(it.qty),
+      unit_price: toInt(it.unit_price),
+    })).filter(x => x.product_id && x.qty > 0 && x.unit_price >= 0);
+
+    const sale = {
+      customer_id: String(o.customer_id || '').trim(),
+      payment_method: String(o.payment_method || 'cash').trim() || 'cash',
+      status: 'paid',
+      notes: String(o.notes || '').trim(),
+      from_order: String(o.id || '').trim(),
+    };
+
+    const computedTotal = items.reduce((acc, it) => acc + (toInt(it.qty) * toInt(it.unit_price)), 0);
+
+    setBusy_(true, 'Convirtiendo a venta…');
+    try {
+      const res = await apiPostAuthed_({ action: 'sale.create', sale, items });
+      removeLocalOrder_(key);
+      renderOrders_();
+      toast(`Venta guardada ✅ (${fmtCOP(toInt(res.total_cop ?? computedTotal))})`, true);
+      await refreshAfterOrderPaid_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
     } finally {
       setBusy_(false);
     }
@@ -1401,7 +1561,7 @@ export function boot() {
       const res = await StoreAPI.upsertProduct(prod);
       toast(res?.mode === 'created' ? 'Producto creado ✅' : 'Producto actualizado ✅', true);
       el.modalProduct?.close?.();
-      await loadAll_();
+      await refreshAfterProductChange_();
     } catch (e) {
       toast(e?.message || String(e), false);
       throw e;
@@ -1415,7 +1575,7 @@ export function boot() {
     try {
       const res = await StoreAPI.setProductActive(id, !currentActive);
       toast(res?.active ? 'Producto activado ✅' : 'Producto ocultado ✅', true);
-      await loadAll_();
+      await refreshAfterProductChange_();
     } catch (e) {
       toast(e?.message || String(e), false);
       throw e;
@@ -1451,7 +1611,7 @@ export function boot() {
       const res = await StoreAPI.adjustStock({ product_id, type, qty, ref, note });
       toast(`Inventario actualizado ✅ (stock: ${toInt(res?.stock)})`, true);
       el.modalStock?.close?.();
-      await loadAll_();
+      await refreshAfterStock_();
     } catch (e) {
       toast(e?.message || String(e), false);
       throw e;
@@ -1484,12 +1644,14 @@ export function boot() {
       return;
     }
 
-    el.restockBody.innerHTML = items.map((it) => {
+    let rowsHtml = '';
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
       const qty = Math.max(0, toInt(it.qty));
       const cost = Math.max(0, toInt(it.cost_cop));
       const subtotal = qty * cost;
 
-      // ✅ Label: nombre + descripción (sin ID en UI principal)
+      const id = String(it.id || '').trim();
       const name = String(it.name || it.id || '').trim();
       const desc = restockDesc_(it);
 
@@ -1498,23 +1660,24 @@ export function boot() {
         <div class="cellSub muted tiny">${escapeHtml(desc)}</div>
       `;
 
-      return `
+      rowsHtml += `
         <tr>
           <td>${label}</td>
           <td class="num mono">
-            <input class="miniNum" type="number" min="0" step="1" value="${qty}" data-restock-qty="${escapeHtml(it.id)}" />
+            <input class="miniNum" type="number" min="0" step="1" value="${qty}" data-restock-qty="${escapeHtml(id)}" />
           </td>
           <td class="num mono">
-            <input class="miniNum" type="number" min="0" step="1" value="${cost}" data-restock-cost="${escapeHtml(it.id)}" />
+            <input class="miniNum" type="number" min="0" step="1" value="${cost}" data-restock-cost="${escapeHtml(id)}" />
           </td>
           <td class="num mono">${fmtCOP(subtotal)}</td>
           <td class="num">
-            <button class="btn btn--tiny btn--ghost" data-restock-del="${escapeHtml(it.id)}" title="Quitar">✕</button>
+            <button class="btn btn--tiny btn--ghost" data-restock-del="${escapeHtml(id)}" title="Quitar">✕</button>
           </td>
         </tr>
       `;
-    }).join('');
+    }
 
+    el.restockBody.innerHTML = rowsHtml;
     if (el.restockTotalUnits) el.restockTotalUnits.textContent = String(toInt(totals.units));
     if (el.restockTotalCost) el.restockTotalCost.textContent = fmtCOP(toInt(totals.cost_cop));
   }
@@ -1548,7 +1711,6 @@ export function boot() {
     const p = State.productsIndex().get(pid);
     if (!p) { toast('No encontré ese producto', false); return; }
 
-    // ✅ Guardamos desc para que el PDF/texto tengan “Descripción”
     const product = {
       id: String(p.id || '').trim(),
       name: p.name || '',
@@ -1575,13 +1737,11 @@ export function boot() {
       const desc = restockDesc_(it);
 
       if (RESTOCK_PDF_HIDE_PRICES) {
-        // ✅ SIN ID: producto — desc xqty
         return `• ${it.name || it.id} — ${desc}  x${qty}`;
       }
 
       const cost = Math.max(0, toInt(it.cost_cop));
       const sub = qty * cost;
-      // En modo con precios, igual dejamos desc para claridad
       return `• ${it.name || it.id} — ${desc}  x${qty}  @ ${fmtCOP(cost)}  = ${fmtCOP(sub)}`;
     });
 
@@ -1649,7 +1809,6 @@ export function boot() {
       throw new Error('autoTable no está cargado (jspdf-autotable)');
     }
 
-    // ✅ Tabla según modo (SIN ID en modo cotización)
     const head = RESTOCK_PDF_HIDE_PRICES
       ? [['Producto', 'Descripción', 'Cant.']]
       : [['Producto', 'Descripción', 'Cant.', 'Costo', 'Subtotal']];
@@ -1667,7 +1826,6 @@ export function boot() {
       return [String(it.name || it.id || ''), String(desc || '—'), qty, fmtCOP(cost), fmtCOP(sub)];
     });
 
-    // ✅ Column alignment
     const columnStyles = RESTOCK_PDF_HIDE_PRICES
       ? { 2: { halign: 'right' } }
       : { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } };
@@ -1684,7 +1842,6 @@ export function boot() {
         doc.setFontSize(9);
         doc.setTextColor(70);
 
-        // ✅ Footer limpio en modo cotización
         const footer = RESTOCK_PDF_HIDE_PRICES
           ? `Unidades: ${toInt(totals.units)}`
           : `Unidades: ${toInt(totals.units)}   ·   Total: ${fmtCOP(toInt(totals.cost_cop))}`;
@@ -1723,7 +1880,7 @@ export function boot() {
     }
 
     on(el.btnRefresh, 'click', async () => {
-      try { await loadAll_(); toast('Actualizado ✅', true); }
+      try { await loadAll_({ force: true }); toast('Actualizado ✅', true); }
       catch (e) { fatal_(e?.message || String(e)); }
     });
 
@@ -1762,12 +1919,19 @@ export function boot() {
 
     on(el.btnNewProduct, 'click', () => openProductModal_(null));
     on(el.btnAdjustStock, 'click', () => openStockModal_());
-    on(el.btnNewSale, 'click', () => openNewSale_());
+    on(el.btnNewSale, 'click', async () => {
+      await ensureProductsLoaded_().catch(() => {});
+      openNewSale_();
+    });
     on(el.btnCancelSale, 'click', () => closeSale_());
     on(el.btnAddToSale, 'click', () => addToSale_());
     on(el.btnSaveSale, 'click', async () => { try { await saveSale_(); } catch {} });
     on(el.btnSaveProduct, 'click', async () => { try { await saveProduct_(); } catch {} });
     on(el.btnSaveStock, 'click', async () => { try { await saveStock_(); } catch {} });
+
+    // (opcional) submits de forms si existen
+    on(el.productForm, 'submit', async (ev) => { ev.preventDefault(); try { await saveProduct_(); } catch {} });
+    on(el.stockForm, 'submit', async (ev) => { ev.preventDefault(); try { await saveStock_(); } catch {} });
 
     on(el.p_cost, 'input', () => {
       if (!el.p_margin) return;
@@ -1784,7 +1948,7 @@ export function boot() {
     });
 
     on(el.catalogBody, 'click', async (ev) => {
-      const btn = ev.target.closest('button');
+      const btn = ev.target?.closest?.('button');
       if (!btn) return;
       const act = btn.dataset.act;
       const id = btn.dataset.id;
@@ -1792,12 +1956,14 @@ export function boot() {
 
       try {
         if (act === 'edit') {
+          await ensureProductsLoaded_().catch(() => {});
           const p = State.productsIndex().get(String(id)) || null;
           openProductModal_(p);
         } else if (act === 'toggle') {
           const cur = btn.dataset.active === '1';
           await toggleProductActive_(id, cur);
         } else if (act === 'restock_add') {
+          await ensureProductsLoaded_().catch(() => {});
           restockAddFromProductId_(id);
         }
       } catch (e) {
@@ -1806,13 +1972,13 @@ export function boot() {
     });
 
     on(el.btnRefreshOrders, 'click', async () => {
-      await loadOrders_().catch(() => {});
+      await ensureOrdersLoaded_(true).catch(() => {});
       renderOrders_();
       toast('Pedidos actualizados ✅', true);
     });
 
     on(el.ordersBody, 'click', async (ev) => {
-      const btn = ev.target.closest('button');
+      const btn = ev.target?.closest?.('button');
       if (!btn) return;
 
       const openId = btn.dataset.orderOpen;
@@ -1846,7 +2012,7 @@ export function boot() {
         if (!items[idx]) return;
         const next = items.map((it, i) => (i === idx ? { ...it, qty: v } : it));
         State.setSaleItems(next);
-        renderSaleItems_();
+        scheduleSaleRender_();
       }
 
       if (t.dataset.salePrice !== undefined) {
@@ -1855,12 +2021,12 @@ export function boot() {
         if (!items[idx]) return;
         const next = items.map((it, i) => (i === idx ? { ...it, unit_price: v } : it));
         State.setSaleItems(next);
-        renderSaleItems_();
+        scheduleSaleRender_();
       }
     });
 
     on(el.saleItemsBody, 'click', (ev) => {
-      const btn = ev.target.closest('button');
+      const btn = ev.target?.closest?.('button');
       if (!btn) return;
       if (btn.dataset.saleDel !== undefined) {
         const idx = toInt(btn.dataset.saleDel);
@@ -1868,7 +2034,7 @@ export function boot() {
         const items = Array.isArray(st.saleItems) ? st.saleItems : [];
         const next = items.filter((_, i) => i !== idx);
         State.setSaleItems(next);
-        renderSaleItems_();
+        scheduleSaleRender_();
       }
     });
 
@@ -1897,7 +2063,7 @@ export function boot() {
     });
 
     on(el.restockBody, 'click', (ev) => {
-      const btn = ev.target.closest('button');
+      const btn = ev.target?.closest?.('button');
       if (!btn) return;
       if (btn.dataset.restockDel !== undefined) {
         const pid = String(btn.dataset.restockDel || '').trim();
@@ -1968,7 +2134,8 @@ export function boot() {
 
         try { State.hydrateFromCache(); } catch {}
 
-        await loadAll_();
+        // Login load: dashboard + orders primero; products/inventory lazy por tab
+        await loadAll_({ force: false });
         toast('Sesión activa ✅', true);
       } catch (err) {
         console.error(err);

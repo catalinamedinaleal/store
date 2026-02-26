@@ -1,10 +1,10 @@
 :root{
   /* ==========================================================================
-     Store · styles.css (LIGHT ONLY) — PRO++
-     - Dashboard interno pro (sin UI oscura)
-     - Cards, tables, modals, toasts, forms
-     - Accesible, responsive, sin frameworks
-     - Compatible con el app.js que pasaste (clases/ids)
+     Store · styles.css (LIGHT ONLY) — PRO+++ (pulido)
+     - Mantiene clases/ids existentes: topbar, tabs, card, tablewrap, modal, toast, etc.
+     - Móvil primero: tabs con overflow, tablas amables, modales mejor en pantallas pequeñas
+     - Accesibilidad: focus visible consistente, contrastes y targets tocables
+     - Sin frameworks, sin modo oscuro (porque ustedes ya eligieron la luz 😌)
   ========================================================================== */
 
   /* Base */
@@ -38,7 +38,7 @@
   --shadow3: 0 18px 50px rgba(11,16,32,.14);
 
   /* Type */
-  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji";
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji";
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
 
   /* Layout */
@@ -60,6 +60,17 @@
 
   /* Touch target */
   --tap: 44px;
+
+  /* Table */
+  --thead-bg: rgba(255,255,255,.92);
+  --row-hover: rgba(12,65,196,.05);
+  --row-zebra: rgba(255,255,255,.38);
+
+  /* Safe areas (iOS notch) */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
 }
 
 /* =========================
@@ -67,6 +78,13 @@
 ========================= */
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
+
+html{
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
 body{
   margin:0;
   font-family: var(--font);
@@ -77,6 +95,7 @@ body{
     linear-gradient(180deg, var(--bg), var(--bg2));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  padding-bottom: var(--safe-bottom);
 }
 
 a{ color:inherit; text-decoration: none; }
@@ -86,8 +105,11 @@ button, input, select, textarea{ font: inherit; }
 img{ max-width:100%; display:block; }
 ::selection{ background: rgba(12,65,196,.14); }
 
-/* Better default line-height */
 body, input, button, select, textarea{ line-height: 1.25; }
+
+/* Hide default clear button in some browsers (search) */
+input[type="search"]::-webkit-search-cancel-button{ -webkit-appearance: none; }
+input[type="search"]::-webkit-search-decoration{ -webkit-appearance: none; }
 
 /* =========================
    Reduced motion
@@ -109,7 +131,7 @@ body, input, button, select, textarea{ line-height: 1.25; }
 }
 .skip-link:focus{
   left: 12px;
-  top: 12px;
+  top: calc(12px + var(--safe-top));
   width:auto;
   height:auto;
   z-index: 9999;
@@ -121,17 +143,30 @@ body, input, button, select, textarea{ line-height: 1.25; }
   outline: none;
 }
 
+/* sr-only helper */
+.sr-only{
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip:rect(0,0,0,0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
+}
+
 /* Better focus for keyboard users */
 :focus-visible{
   outline: none;
   box-shadow: 0 0 0 4px var(--focus);
 }
 
-/* Inputs/buttons inside tables too */
 .btn:focus-visible,
 .input:focus-visible,
 .tab:focus-visible,
-.miniNum:focus-visible{
+.miniNum:focus-visible,
+.thSort:focus-visible{
   box-shadow: 0 0 0 4px var(--focus);
 }
 
@@ -150,7 +185,7 @@ textarea.input:disabled{
 .wrap{
   max-width: var(--wrap);
   margin: 0 auto;
-  padding: 18px 16px 28px;
+  padding: calc(18px + var(--safe-top)) calc(16px + var(--safe-right)) calc(28px + var(--safe-bottom)) calc(16px + var(--safe-left));
 }
 .panel{ padding-top: 10px; }
 
@@ -175,11 +210,14 @@ hr{
   align-items:center;
   justify-content:space-between;
   gap: 14px;
-  padding: 12px 16px;
+  padding: calc(12px + var(--safe-top)) calc(16px + var(--safe-right)) 12px calc(16px + var(--safe-left));
   border-bottom: 1px solid var(--line);
   background: rgba(246,248,255,.78);
   backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
+
+.topbar__left{ min-width: 0; }
 
 .brand{
   display:flex;
@@ -197,6 +235,7 @@ hr{
   box-shadow: 0 6px 16px rgba(12,65,196,.18);
   flex: 0 0 auto;
 }
+.brand__text{ min-width: 0; }
 .brand__title{
   font-weight: 800;
   letter-spacing: .2px;
@@ -213,6 +252,8 @@ hr{
   align-items:center;
   gap: 10px;
   min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* =========================
@@ -267,6 +308,57 @@ hr{
 }
 
 /* =========================
+   Restock button (topbar)
+========================= */
+.restockBtn{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(11,16,32,.10);
+  background: rgba(255,255,255,.86);
+  box-shadow: 0 8px 20px rgba(11,16,32,.06);
+  cursor: pointer;
+  height: 40px;
+  user-select: none;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.restockBtn:hover{ filter: brightness(0.99); }
+.restockBtn:active{ transform: translateY(1px); }
+
+.restockBadge{
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  font-family: var(--mono);
+  background: rgba(12,65,196,.14);
+  border: 1px solid rgba(12,65,196,.18);
+  color: rgba(11,16,32,.9);
+}
+.restockBadge[hidden]{ display:none !important; }
+
+.restockGrid{ display:grid; grid-template-columns: 1fr; gap: 12px; }
+.restockTotals{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px dashed rgba(11,16,32,.16);
+  border-radius: 14px;
+  background: rgba(255,255,255,.6);
+}
+.restockTotals .mono{ font-variant-numeric: tabular-nums; }
+
+/* =========================
    Typography
 ========================= */
 .h1{
@@ -307,6 +399,7 @@ hr{
   border-radius: var(--r-lg);
   box-shadow: var(--shadow);
 }
+
 .subcard{ background: var(--card2); }
 
 .card__head{
@@ -324,7 +417,6 @@ hr{
   flex-wrap: wrap;
 }
 
-/* Nice divider helper */
 .divider{
   height: 1px;
   background: var(--line);
@@ -389,11 +481,13 @@ hr{
   transition: border-color .15s var(--ease), box-shadow .15s var(--ease), transform .08s var(--ease), background .15s var(--ease);
   min-height: var(--tap);
 }
+
 .input:focus{
   border-color: rgba(12,65,196,.45);
   box-shadow: 0 0 0 4px var(--focus);
   background: rgba(255,255,255,.98);
 }
+
 .input::placeholder{ color: rgba(11,16,32,.40); }
 
 .input--sm{
@@ -482,7 +576,7 @@ select.input{ cursor: pointer; }
   border-radius: 10px;
   font-size: 12px;
   box-shadow: none;
-  min-height: 34px; /* still usable */
+  min-height: 34px;
 }
 .btn--tiny:hover{ box-shadow: 0 10px 22px rgba(11,16,32,.08); }
 
@@ -540,7 +634,10 @@ select.input{ cursor: pointer; }
   box-shadow: 0 10px 28px rgba(11,16,32,.06);
   margin: 0 0 14px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
 }
 .tabs::-webkit-scrollbar{ height: 10px; }
 .tabs::-webkit-scrollbar-thumb{
@@ -548,7 +645,6 @@ select.input{ cursor: pointer; }
   border-radius: 999px;
 }
 
-/* Soporta tanto .is-active como aria-selected="true" */
 .tab{
   border: 1px solid transparent;
   background: transparent;
@@ -559,6 +655,7 @@ select.input{ cursor: pointer; }
   transition: background .15s var(--ease), border-color .15s var(--ease), transform .08s var(--ease), box-shadow .15s var(--ease);
   white-space: nowrap;
   min-height: 40px;
+  scroll-snap-align: start;
 }
 .tab:hover{
   background: rgba(255,255,255,.75);
@@ -574,6 +671,36 @@ select.input{ cursor: pointer; }
 .tabs__spacer{ flex:1; min-width: 16px; }
 
 /* =========================
+   Sort headers (flechitas)
+========================= */
+.thSort{
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+  border:0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  user-select:none;
+  -webkit-tap-highlight-color: transparent;
+}
+.thSortIcon{
+  width: 14px;
+  height: 14px;
+  display:inline-grid;
+  place-items:center;
+  border-radius: 8px;
+  color: rgba(11,16,32,.55);
+  font-size: 12px;
+  line-height: 1;
+}
+th[data-sort-active="true"] .thSortIcon{
+  color: rgba(12,65,196,.95);
+}
+
+/* =========================
    Tables
 ========================= */
 .tablewrap{
@@ -584,6 +711,17 @@ select.input{ cursor: pointer; }
   border: 1px solid rgba(11,16,32,.06);
   background: rgba(255,255,255,.55);
 }
+
+.tablewrap::-webkit-scrollbar{ height: 10px; width: 10px; }
+.tablewrap::-webkit-scrollbar-thumb{
+  background: rgba(11,16,32,.14);
+  border-radius: 999px;
+}
+.tablewrap::-webkit-scrollbar-track{
+  background: rgba(255,255,255,.35);
+  border-radius: 999px;
+}
+
 .table{
   width: 100%;
   border-collapse: collapse;
@@ -601,15 +739,19 @@ select.input{ cursor: pointer; }
 .table thead th{
   position: sticky;
   top: 0;
-  background: rgba(255,255,255,.92);
+  background: var(--thead-bg);
   backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   z-index: 1;
   text-align: left;
   font-size: 12px;
   color: rgba(11,16,32,.72);
 }
+
+/* Zebra suave sin matar legibilidad */
+.table tbody tr:nth-child(even){ background: var(--row-zebra); }
 .table tbody tr{ transition: background .12s var(--ease); }
-.table tbody tr:hover{ background: rgba(12,65,196,.05); }
+.table tbody tr:hover{ background: var(--row-hover); }
 
 /* Compact tables */
 .table--compact{ min-width: 560px; }
@@ -722,11 +864,14 @@ select.input{ cursor: pointer; }
   padding: 0;
   background: transparent;
 }
-.modal[open]{ display: block; } /* algunos navegadores se ponen raros */
+.modal[open]{ display: block; }
 .modal::backdrop{
   background: rgba(11,16,32,.35);
   backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
+
+/* Card del modal */
 .modal__card{
   width: min(740px, calc(100vw - 24px));
   margin: 10vh auto;
@@ -737,8 +882,16 @@ select.input{ cursor: pointer; }
   padding: 14px;
 }
 @media (max-width: 720px){
-  .modal__card{ margin: 6vh auto; }
+  /* Modal tipo "bottom sheet" suave, sin ponerse dramático */
+  .modal__card{
+    width: calc(100vw - 16px);
+    margin: auto;
+    margin-top: calc(8vh + var(--safe-top));
+    margin-bottom: calc(10px + var(--safe-bottom));
+    border-radius: 18px;
+  }
 }
+
 .modal__head{
   display:flex;
   align-items:flex-start;
@@ -755,6 +908,7 @@ select.input{ cursor: pointer; }
   padding-top: 12px;
   border-top: 1px solid rgba(11,16,32,.10);
   margin-top: 12px;
+  flex-wrap: wrap;
 }
 .grid2{
   display:grid;
@@ -785,8 +939,8 @@ select.input{ cursor: pointer; }
 ========================= */
 .toast{
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: calc(16px + var(--safe-right));
+  bottom: calc(16px + var(--safe-bottom));
   z-index: 80;
   max-width: min(420px, calc(100vw - 32px));
   padding: 12px 14px;
@@ -813,16 +967,28 @@ select.input{ cursor: pointer; }
 .mono.small{ font-size: 12px; }
 .table td .btn{ margin-left: 6px; }
 .table td .btn:first-child{ margin-left: 0; }
-
-/* Make buttons inside tiny cells align nicely */
 .table .row{ gap: 8px; justify-content: flex-end; }
 
 /* Prevent sticky header overlap glitches on Safari */
 .table thead th{ transform: translateZ(0); }
 
-/* On very small screens, reduce padding slightly */
+/* =========================
+   Responsive tweaks
+========================= */
 @media (max-width: 420px){
-  .wrap{ padding: 14px 12px 22px; }
-  .topbar{ padding: 10px 12px; }
+  .wrap{
+    padding: calc(14px + var(--safe-top)) calc(12px + var(--safe-right)) calc(22px + var(--safe-bottom)) calc(12px + var(--safe-left));
+  }
+  .topbar{
+    padding: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 10px calc(12px + var(--safe-left));
+  }
   .kpi{ min-width: 140px; }
+  #userEmail{ max-width: 220px; }
+}
+
+@media (max-width: 520px){
+  .card__head{ flex-direction: column; align-items: stretch; }
+  .card__actions{ width: 100%; }
+  .card__actions .input--sm{ flex: 1 1 240px; min-width: 0; }
+  .pill{ padding: 8px 10px; }
 }

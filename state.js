@@ -1,27 +1,27 @@
 'use strict';
 
 /* =============================================================================
-  state.js — Store (mini state manager) v4.6
+  state.js — Store (mini state manager) v5.1 (perf + safety)
   ------------------------------------------------
-  ✅ Estado único y predecible (single source of truth)
-  ✅ Suscripciones por evento (sin frameworks, sin llorar)
-  ✅ Cache opcional (localStorage) con TTL + versionado
-  ✅ Whitelist persistible (nunca tokens)
-  ✅ Mutaciones seguras (inmutabilidad light real)
-  ✅ transaction(): batch updates con 1 sola emisión
-  ✅ Derived memo: productsIndex() memoizado por referencia
-  ✅ Restock Cart (pedido a proveedor)
-     - restock: { supplier, notes, items[] }
-     - helpers: add/update/remove/clear + totals
+  Mejoras sobre v5.0 (sin romper app.js):
+  ✅ Emisiones más baratas: wildcard solo si hubo cambios reales
+  ✅ Cache: no se guarda en cacheSync; throttle + flush en pagehide/visibility
+  ✅ Cross-tab sync: evita pisarse con self-saves (best-effort)
+  ✅ Normalizadores más tolerantes (saleItems/restock) sin reventar data vieja
+  ✅ Derived: productsIndex memo + invalidate por referencia
+  ✅ API intacta (mismos métodos usados por app.js)
 ============================================================================= */
 
-const KEY = 'store_manager_state_v4';
-const CACHE_VERSION = 4;
+/* =========================
+   Cache config
+========================= */
+const KEY = 'store_manager_state_v5';
+const CACHE_VERSION = 5;
 
 // TTL cache: 6 horas
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-// Solo estas keys son persistibles (whitelist)
+// Persistimos SOLO estas keys (whitelist) — NUNCA tokens
 const CACHE_KEYS = Object.freeze([
   'products',
   'inventory',
@@ -93,7 +93,10 @@ function safeArray(x) {
 }
 
 function getIn(obj, path, fallback = undefined) {
-  const parts = Array.isArray(path) ? path : String(path || '').split('.').filter(Boolean);
+  const parts = Array.isArray(path)
+    ? path
+    : String(path || '').split('.').filter(Boolean);
+
   let cur = obj;
   for (const p of parts) {
     if (!cur || typeof cur !== 'object') return fallback;
@@ -110,27 +113,30 @@ function createEmitter() {
 
   function on(evt, fn) {
     if (typeof fn !== 'function') return () => {};
-    if (!map.has(evt)) map.set(evt, new Set());
-    map.get(evt).add(fn);
-    return () => off(evt, fn);
+    const e = String(evt || '').trim() || '*';
+    if (!map.has(e)) map.set(e, new Set());
+    map.get(e).add(fn);
+    return () => off(e, fn);
   }
 
   function off(evt, fn) {
-    const set = map.get(evt);
+    const e = String(evt || '').trim() || '*';
+    const set = map.get(e);
     if (!set) return;
     set.delete(fn);
-    if (set.size === 0) map.delete(evt);
+    if (set.size === 0) map.delete(e);
   }
 
   function emit(evt, payload) {
-    const set = map.get(evt);
+    const e = String(evt || '').trim() || '*';
+    const set = map.get(e);
     if (!set || !set.size) return;
 
     // copia para evitar issues si alguien se desuscribe dentro del listener
     const listeners = Array.from(set);
     for (const fn of listeners) {
       try { fn(payload); }
-      catch (e) { console.warn('[State] listener error:', e); }
+      catch (err) { console.warn('[State] listener error:', err); }
     }
   }
 
@@ -165,11 +171,11 @@ const DEFAULT_STATE = Object.freeze({
   saleOpen: false,
   saleItems: [],
 
-  // restock cart
+  // restock cart (pedido a proveedor)
   restock: Object.freeze({
     supplier: '',
     notes: '',
-    items: [], // [{ id, name, brand, sku, qty, cost_cop }]
+    items: [], // [{ id, name, desc, brand, sku, qty, cost_cop }]
   }),
 
   // meta
@@ -181,6 +187,50 @@ let _state = { ...DEFAULT_STATE };
 // memo derivados
 let _memoProductsRef = null;
 let _memoProductsIndex = null;
+
+/* =========================
+   Restock normalize
+========================= */
+function normalizeRestock_(x) {
+  const r = isObj(x) ? x : {};
+
+  const items = safeArray(r.items).map((it) => {
+    const o = isObj(it) ? it : {};
+    const id = String(o.id || o.product_id || o.pid || '').trim();
+    return {
+      id,
+      name: clampStr(o.name || o.product_name || o.nombre || '', 220),
+      // importante: guardamos desc para PDF/texto (app.js usa it.desc)
+      desc: clampStr(o.desc || o.description || o.descripcion || '', 4000),
+      brand: clampStr(o.brand || '', 160),
+      sku: clampStr(o.sku || '', 120),
+      qty: Math.max(0, toInt(o.qty)),
+      cost_cop: Math.max(0, toInt(o.cost_cop ?? o.cost ?? o.costo_cop ?? o.costo ?? o.unit_cost)),
+    };
+  }).filter(it => it.id);
+
+  return {
+    supplier: clampStr(r.supplier || '', 240),
+    notes: clampStr(r.notes || '', 1200),
+    items,
+  };
+}
+
+/* =========================
+   Sale normalize
+========================= */
+function normalizeSaleItems_(items) {
+  return safeArray(items).map(it => {
+    const o = isObj(it) ? it : {};
+    return {
+      ...o,
+      product_id: clampStr(o.product_id ?? o.id ?? '', 120),
+      name: clampStr(o.name ?? '', 220),
+      qty: Math.max(1, toInt(o.qty)),
+      unit_price: Math.max(0, toInt(o.unit_price ?? o.price_cop ?? o.price ?? 0)),
+    };
+  }).filter(it => String(it.product_id || '').trim());
+}
 
 /* =========================
    Persistence (optional)
@@ -204,10 +254,46 @@ function shouldCache_(patch) {
   return false;
 }
 
-function saveCache_() {
-  const payload = _makeCachePayload();
-  const ok = safeLSSet(KEY, JSON.stringify(payload));
-  if (!ok) console.warn('[State] No se pudo guardar cache (localStorage).');
+// guardamos en "micro-throttle" para no matar el main thread
+let _cacheSaveT = null;
+let _cacheDirty = false;
+let _lastSaveAt = 0;
+
+function saveCache_Deferred_(meta = {}) {
+  // si viene de cacheSync, NO guardamos o hacemos loop cross-tab
+  if (meta && meta.cacheSync) return;
+
+  _cacheDirty = true;
+  const now = Date.now();
+  const minGap = 120; // ms, best-effort
+
+  clearTimeout(_cacheSaveT);
+  const wait = Math.max(0, (_lastSaveAt + minGap) - now);
+
+  _cacheSaveT = setTimeout(() => {
+    _cacheSaveT = null;
+    if (!_cacheDirty) return;
+
+    const payload = _makeCachePayload();
+    const ok = safeLSSet(KEY, JSON.stringify(payload));
+    _lastSaveAt = Date.now();
+    _cacheDirty = false;
+
+    if (!ok) console.warn('[State] No se pudo guardar cache (localStorage).');
+  }, Math.max(30, wait));
+}
+
+function flushCacheNow_() {
+  try {
+    clearTimeout(_cacheSaveT);
+    _cacheSaveT = null;
+    if (!_cacheDirty) return;
+    const payload = _makeCachePayload();
+    const ok = safeLSSet(KEY, JSON.stringify(payload));
+    _lastSaveAt = Date.now();
+    _cacheDirty = false;
+    if (!ok) console.warn('[State] No se pudo guardar cache (flush).');
+  } catch {}
 }
 
 function loadCache_() {
@@ -238,48 +324,7 @@ function loadCache_() {
 }
 
 /* =========================
-   Restock normalize
-========================= */
-function normalizeRestock_(x) {
-  const r = isObj(x) ? x : {};
-  const items = safeArray(r.items).map((it) => {
-    const o = isObj(it) ? it : {};
-    const id = String(o.id || o.product_id || o.pid || '').trim();
-    return {
-      id,
-      name: clampStr(o.name || o.product_name || o.nombre || '', 220),
-      brand: clampStr(o.brand || '', 160),
-      sku: clampStr(o.sku || '', 120),
-      qty: Math.max(0, toInt(o.qty)),
-      cost_cop: Math.max(0, toInt(o.cost_cop ?? o.cost ?? o.costo_cop ?? o.costo ?? o.unit_cost)),
-    };
-  }).filter(it => it.id);
-
-  return {
-    supplier: clampStr(r.supplier || '', 240),
-    notes: clampStr(r.notes || '', 1200),
-    items,
-  };
-}
-
-/* =========================
-   Sale normalize
-========================= */
-function normalizeSaleItems_(items) {
-  return safeArray(items).map(it => {
-    const o = isObj(it) ? it : {};
-    return {
-      ...o,
-      product_id: clampStr(o.product_id ?? o.id ?? '', 120),
-      name: clampStr(o.name ?? '', 220),
-      qty: Math.max(1, toInt(o.qty)),
-      unit_price: Math.max(0, toInt(o.unit_price ?? o.price_cop ?? o.price ?? 0)),
-    };
-  });
-}
-
-/* =========================
-   Internal emit
+   Internal emit + memo invalidation
 ========================= */
 function _invalidateMemoIfNeeded(patch) {
   if ('products' in patch) {
@@ -298,11 +343,63 @@ function emitPatch_(prev, patch, meta) {
     }
   }
 
-  if (changedKeys.length) {
-    EE.emit('batch', { keys: changedKeys, prev, next: _state, meta });
+  if (!changedKeys.length) return;
+
+  EE.emit('batch', { keys: changedKeys, prev, next: _state, meta });
+
+  // wildcard solo si hubo cambios
+  EE.emit('*', { prev, next: _state, meta });
+}
+
+/* =========================
+   Cross-tab sync (best effort)
+========================= */
+let _lastSelfWriteStamp = 0;
+
+function attachCrossTabSync_() {
+  try {
+    // Marcar "self write" cuando guardamos cache (para no auto-absorber lo mismo)
+    const _origSet = safeLSSet;
+    // No monkeypatch de localStorage global, solo registramos al guardar con flush/deferred
+    // (lo hacemos marcando en flushCacheNow_/saveCache_Deferred_ vía stamp)
+    // Aquí dejamos la variable lista.
+    void _origSet;
+
+    window.addEventListener('storage', (ev) => {
+      if (!ev) return;
+      if (ev.key !== KEY) return;
+
+      // Evita absorber inmediatamente tu propio set en algunos browsers raros
+      const now = Date.now();
+      if (_lastSelfWriteStamp && (now - _lastSelfWriteStamp) < 250) return;
+
+      const cached = loadCache_();
+      if (!cached) return;
+
+      // Solo data persistida (no UI/auth)
+      State.set({
+        products: cached.products || [],
+        inventory: cached.inventory || [],
+        sales: cached.sales || [],
+        orders: cached.orders || [],
+        dashboard: cached.dashboard || null,
+        lastSync: cached.lastSync || null,
+        restock: cached.restock || normalizeRestock_(null),
+      }, { cacheSync: true });
+    });
+  } catch {
+    // no-op
   }
 
-  EE.emit('*', { prev, next: _state, meta });
+  // Flush cuando la pestaña se va, para no perder cambios
+  try {
+    window.addEventListener('pagehide', () => flushCacheNow_());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushCacheNow_();
+    });
+  } catch {
+    // no-op
+  }
 }
 
 /* =========================
@@ -333,17 +430,21 @@ export const State = {
 
     let nextPatch = patch;
 
-    // normalize “dangerous” keys
+    // normalize keys
     if ('restock' in nextPatch) nextPatch = { ...nextPatch, restock: normalizeRestock_(nextPatch.restock) };
     if ('saleItems' in nextPatch) nextPatch = { ...nextPatch, saleItems: normalizeSaleItems_(nextPatch.saleItems) };
 
     const prev = _state;
+
     _invalidateMemoIfNeeded(nextPatch);
     _state = { ..._state, ...nextPatch };
 
     emitPatch_(prev, nextPatch, meta);
 
-    if (shouldCache_(nextPatch)) saveCache_();
+    if (shouldCache_(nextPatch)) {
+      // marca self write cuando efectivamente guardemos
+      saveCache_Deferred_(meta);
+    }
   },
 
   /**
@@ -360,7 +461,7 @@ export const State = {
    * transaction(fn)
    * - Soporta DOS estilos:
    *   A) fn(draft, state) { draft.x=1; draft.y=2; }
-   *   B) return patch; (si quieres)
+   *   B) return patch;
    */
   transaction(fn, meta = {}) {
     if (typeof fn !== 'function') return;
@@ -389,7 +490,7 @@ export const State = {
 
     emitPatch_(prev, nextPatch, { ...meta, tx: true });
 
-    if (shouldCache_(nextPatch)) saveCache_();
+    if (shouldCache_(nextPatch)) saveCache_Deferred_({ ...meta, tx: true });
   },
 
   /* -------- convenience -------- */
@@ -399,7 +500,7 @@ export const State = {
   setUser(user) { this.set({ user: user || null }, { sys: true }); },
 
   setIdToken(token) {
-    // NO persistir
+    // NUNCA persistir
     this.set({ idToken: clampStr(token, 8000) }, { sys: true });
   },
 
@@ -434,15 +535,14 @@ export const State = {
 
   ordersOpenCount() {
     const list = safeArray(_state.orders);
-    let n = totalsZeroSafe_(list, (o) => {
+    return totalsZeroSafe_(list, (o) => {
       const s = String(o?.status || '').toLowerCase().trim();
       return (s === 'open' || s === 'pending' || s === 'pedido' || s === 'abierto') ? 1 : 0;
     });
-    return n;
   },
 
   /* =========================
-     ✅ Restock Cart API
+     Restock Cart API
   ========================= */
   getRestock() { return _state.restock; },
 
@@ -481,6 +581,7 @@ export const State = {
 
     const incomingCost = Math.max(0, toInt(p.cost_cop ?? p.cost ?? p.costo_cop ?? p.costo));
     const incomingName = clampStr(p.name ?? '', 220);
+    const incomingDesc = clampStr(p.desc ?? p.description ?? p.descripcion ?? '', 4000);
     const incomingBrand = clampStr(p.brand ?? '', 160);
     const incomingSku = clampStr(p.sku ?? '', 120);
 
@@ -492,6 +593,7 @@ export const State = {
         qty: Math.max(0, toInt(cur.qty) + addQty),
         cost_cop: incomingCost > 0 ? incomingCost : Math.max(0, toInt(cur.cost_cop)),
         name: incomingName || cur.name,
+        desc: incomingDesc || cur.desc,
         brand: incomingBrand || cur.brand,
         sku: incomingSku || cur.sku,
       };
@@ -501,6 +603,7 @@ export const State = {
       nextItems = items.concat([{
         id,
         name: incomingName,
+        desc: incomingDesc,
         brand: incomingBrand,
         sku: incomingSku,
         qty: addQty,
@@ -524,6 +627,7 @@ export const State = {
     const next = {
       id,
       name: clampStr(it.name || it.product_name || '', 220),
+      desc: clampStr(it.desc || it.description || it.descripcion || '', 4000),
       brand: clampStr(it.brand || '', 160),
       sku: clampStr(it.sku || '', 120),
       qty: Math.max(0, toInt(it.qty)),
@@ -568,6 +672,21 @@ export const State = {
 
     const nextItems = items.slice();
     nextItems[idx] = { ...nextItems[idx], cost_cop: Math.max(0, toInt(cost)) };
+
+    this.set({ restock: { ...r, items: nextItems } }, { data: true, restock: true });
+  },
+
+  restockSetDesc(productId, desc) {
+    const id = String(productId || '').trim();
+    if (!id) return;
+
+    const r = normalizeRestock_(_state.restock);
+    const items = safeArray(r.items);
+    const idx = items.findIndex(x => String(x.id) === id);
+    if (idx < 0) return;
+
+    const nextItems = items.slice();
+    nextItems[idx] = { ...nextItems[idx], desc: clampStr(desc ?? '', 4000) };
 
     this.set({ restock: { ...r, items: nextItems } }, { data: true, restock: true });
   },
@@ -642,11 +761,11 @@ export const State = {
 
   resetAll() {
     this.clearCache();
-    const prev = _state;
 
     _memoProductsRef = null;
     _memoProductsIndex = null;
 
+    const prev = _state;
     _state = {
       ...DEFAULT_STATE,
       bootedAt: nowISO(),
@@ -655,6 +774,16 @@ export const State = {
     EE.emit('*', { prev, next: _state, reset: true });
     EE.emit('batch', { keys: Object.keys(DEFAULT_STATE), prev, next: _state, reset: true });
   },
+
+  /* -------- init hook (opcional) -------- */
+  init() {
+    if (this._inited) return;
+    this._inited = true;
+    attachCrossTabSync_();
+  },
+
+  // interno: si alguien quiere forzar flush (debug)
+  _flushCacheNow() { flushCacheNow_(); },
 };
 
 /* =========================
@@ -667,3 +796,22 @@ function totalsZeroSafe_(arr, fn) {
   }
   return n;
 }
+
+/* Auto-init (sin explotar en entornos raros) */
+try { State.init(); } catch {}
+
+/* Marca self-write stamp cuando realmente hacemos flush/deferred-save */
+(function hookSelfWriteStamp_() {
+  const origFlush = flushCacheNow_;
+  flushCacheNow_ = function () {
+    _lastSelfWriteStamp = Date.now();
+    return origFlush();
+  };
+
+  const origDeferred = saveCache_Deferred_;
+  saveCache_Deferred_ = function (meta = {}) {
+    // stamp solo cuando se programe (best-effort)
+    _lastSelfWriteStamp = Date.now();
+    return origDeferred(meta);
+  };
+})();
