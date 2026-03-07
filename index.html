@@ -67,7 +67,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-02-26.1";
+    window.__BUILD__ = "2026-02-26.2";
   </script>
 
   <!-- CSS -->
@@ -178,6 +178,9 @@
       white-space:nowrap !important;
       border:0 !important;
     }
+
+    /* Toast: en tu HTML estaba hidden; así funciona aunque app.js no lo “arregle” */
+    .toast[hidden]{ display:none !important; }
 
     @media print{
       body{ background:#fff !important; }
@@ -601,32 +604,32 @@
           <table class="table table--compact" aria-label="Tabla de movimientos" id="tblMoves">
             <thead>
               <tr>
-                <th data-sort-key="id">
+                <th data-sort-key="moves_id">
                   <button class="thSort" type="button" data-sort="moves_id" aria-label="Ordenar movimientos por ID">
                     <span>ID</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
-                <th data-sort-key="product">
+                <th data-sort-key="moves_product">
                   <button class="thSort" type="button" data-sort="moves_product" aria-label="Ordenar movimientos por Producto">
                     <span>Producto</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
-                <th data-sort-key="type">
+                <th data-sort-key="moves_type">
                   <button class="thSort" type="button" data-sort="moves_type" aria-label="Ordenar movimientos por Tipo">
                     <span>Tipo</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
-                <th class="num" data-sort-key="qty">
+                <th class="num" data-sort-key="moves_qty">
                   <button class="thSort" type="button" data-sort="moves_qty" aria-label="Ordenar movimientos por Cantidad">
                     <span>Cantidad</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
-                <th data-sort-key="ref">
+                <th data-sort-key="moves_ref">
                   <button class="thSort" type="button" data-sort="moves_ref" aria-label="Ordenar movimientos por Referencia">
                     <span>Referencia</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
-                <th data-sort-key="date">
+                <th data-sort-key="moves_date">
                   <button class="thSort" type="button" data-sort="moves_date" aria-label="Ordenar movimientos por Fecha">
                     <span>Fecha</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
@@ -682,7 +685,8 @@
         </div>
       </section>
 
-      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+      <!-- OJO: no lo dejamos hidden para que toast() pueda mostrarlo sin pelear con HTML -->
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </section>
   </main>
 
@@ -710,27 +714,41 @@
           </label>
         </div>
 
+        <!-- ✅ RESTOCK TABLE (alineada con el render esperado) -->
         <div class="tablewrap">
           <table class="table table--compact" aria-label="Tabla restock">
             <thead>
               <tr>
-                <th>Producto</th>
+                <th>Nombre</th>
                 <th>Marca</th>
                 <th class="num">Cant.</th>
+                <th class="num">Precio unit.</th>
+                <th class="num">Total</th>
                 <th class="num">—</th>
               </tr>
             </thead>
             <tbody id="restockBody">
-              <tr><td colspan="4" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>
+              <tr>
+                <td colspan="6" class="muted">
+                  Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
 
+        <!-- ✅ Totales -->
         <div class="restockTotals">
           <div>
             <div class="tiny muted">Unidades</div>
             <div class="mono big" id="restockTotalUnits">0</div>
           </div>
+
+          <div style="text-align:right;">
+            <div class="tiny muted">Total pedido</div>
+            <div class="mono big" id="restockTotalCost">$0</div>
+          </div>
+
           <div style="text-align:right;">
             <div class="tiny muted">Borrador</div>
             <div class="tiny muted">Se guarda automáticamente</div>
@@ -751,13 +769,16 @@
 
   <!-- Modal: Product -->
   <dialog class="modal" id="modalProduct" aria-label="Producto">
+    <!-- OJO: se deja method="dialog" pero los botones de cerrar/cancelar ya NO hacen submit.
+         Eso evita el "guardar fantasma" cuando la gente solo cierra el modal. -->
     <form method="dialog" class="modal__card" id="productForm">
       <div class="modal__head">
         <div>
           <h3 class="h3" id="productTitle">Producto</h3>
           <p class="muted tiny">Crear o editar producto.</p>
         </div>
-        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+        <!-- ✅ Antes era submit con value="cancel" (disparaba submit). Ahora solo cierra. -->
+        <button class="btn btn--ghost" id="btnCloseProductTop" type="button" data-close-dialog="modalProduct">Cerrar</button>
       </div>
 
       <div class="grid2">
@@ -810,6 +831,13 @@
           <input class="input" id="p_price" type="number" inputmode="numeric" step="1" min="0" />
         </label>
 
+        <!-- ✅ NUEVO: Precio competencia (manual) -->
+        <label class="field">
+          <span class="label">Precio competencia (COP) <span class="muted tiny">· manual</span></span>
+          <input class="input" id="p_comp_price" type="number" inputmode="numeric" step="1" min="0" placeholder="Ej: 129900" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">Precio de referencia encontrado en mercado.</span>
+        </label>
+
         <label class="field" style="grid-column: 1 / -1;">
           <span class="label">Descripción</span>
           <textarea class="input" id="p_desc" rows="3"></textarea>
@@ -823,7 +851,8 @@
 
       <div class="modal__foot">
         <button class="btn btn--primary" id="btnSaveProduct" type="button">Guardar</button>
-        <button class="btn btn--ghost" value="cancel" type="submit">Cancelar</button>
+        <!-- ✅ Antes era submit/cancel. Ahora solo cierra. -->
+        <button class="btn btn--ghost" id="btnCancelProduct" type="button" data-close-dialog="modalProduct">Cancelar</button>
       </div>
     </form>
   </dialog>
@@ -880,14 +909,14 @@
 
   <!-- CONFIG -->
   <script>
-    const API_BASE_RAW = "https://script.google.com/macros/s/AKfycbxPQu6CUIat3PzcuP6yz9n5IP8fmMus3f7asj437VrH54z_MkN-qcFgf99bXVP6HENOTA/exec";
+    const API_BASE_RAW = "https://script.google.com/macros/s/AKfycbwSia20JcoC2GtB7UZ1dkESkmT_wF6VpmPmEDWpfHytSzk3G0evSict-li0B5PFJH2e9Q/exec";
     const API_BASE = String(API_BASE_RAW || "").trim().replace(/\/+$/, "");
 
     window.STORE_CFG = Object.freeze({
       API_BASE,
       CURRENCY: "COP",
       LOCALE: "es-CO",
-      BUILD: window.__BUILD__ || "2026-02-26.1",
+      BUILD: window.__BUILD__ || "2026-02-26.2",
       API_TIMEOUT_MS: 25000,
       API_FORCE_POST: true,
       API_COALESCE: true,
@@ -956,6 +985,16 @@
     onAuthStateChanged(auth, (user) => {
       if (restockBtn) restockBtn.hidden = !user;
       if (userPill) userPill.hidden = !user;
+    });
+
+    // ✅ Cierre “seguro” de modales (sin submit)
+    const closeButtons = document.querySelectorAll("[data-close-dialog]");
+    closeButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-close-dialog");
+        const dlg = document.getElementById(id);
+        try { dlg && dlg.close(); } catch {}
+      });
     });
 
     // Cache-busting del app.js

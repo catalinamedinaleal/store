@@ -1,16 +1,16 @@
 'use strict';
 /* =============================================================================
-Store · app.js (GitHub Pages) — PRO++ v6.13 (perf + stability)
+Store · app.js (GitHub Pages) — PRO++ v6.17 (quality-of-life + bugfixes)
 
-Mejoras sobre v6.12 (sin romper tu HTML/IDs):
-✅ FIX real: se usaba fatal_() antes de existir (podía romper el boot en algunos casos)
-✅ Tabs: menos renders duplicados (showTab ya no dispara renderActive_ 3 veces por deporte)
-✅ Orders: render y meta más consistente; “hydrate” solo cuando toca
-✅ Sales: datalist rebuild aún más seguro (no reconstruye si no hay cambios)
-✅ Delegación: más null-safe y menos work en cada input/click
-✅ Restock: render más barato y con menos lecturas repetidas
+Mejoras sobre v6.16 (sin romper tu HTML/IDs):
+✅ FIX: Cerrar modal ya NO “guarda” por accidente (submit solo si el submitter es el botón Guardar)
+✅ Campo opcional “precio de competencia” (manual) sin romper nada:
+   - Si existe un input con id p_competitor_price (o alias), lo lee/guarda
+   - Si no existe, el sistema ignora el campo y sigue normal
+✅ Catálogo: si hay precio de competencia, lo muestra discretamente en la sublínea
+✅ Más null-safety y defensivo en delegación de eventos
 
-Mantiene TODO lo que ya estaba:
+Mantiene TODO:
 - Lazy loading por tabs
 - Refresh parcial por acción
 - Restock PDF (jsPDF + autoTable)
@@ -75,7 +75,85 @@ function genProductId_({ name, category } = {}) {
   return `${base}-${stamp}${rand}`;
 }
 
+/* =========================
+   Tiny perf utils
+========================= */
+function rafBatch_(fn) {
+  let raf = 0;
+  return (...args) => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      fn(...args);
+    });
+  };
+}
+
+/* =========================
+   CSS.escape fallback (old browsers)
+========================= */
+function cssEscape_(s) {
+  const str = String(s ?? '');
+  try {
+    if (globalThis.CSS && typeof globalThis.CSS.escape === 'function') return globalThis.CSS.escape(str);
+  } catch {}
+  return str.replace(/["\\]/g, '\\$&').replace(/\s/g, '\\ ');
+}
+
+/* Focus keeper: evita que un render te saque del input en el que estás */
+function captureFocus_() {
+  const a = document.activeElement;
+  if (!(a instanceof HTMLElement)) return null;
+
+  const ds = a.dataset || {};
+  const key =
+    ds.restockQty ?? ds.restockCost ??
+    ds.saleQty ?? ds.salePrice ??
+    null;
+
+  if (key === null) return null;
+
+  return {
+    key: String(key),
+    type:
+      (ds.restockQty !== undefined ? 'restockQty' :
+      (ds.restockCost !== undefined ? 'restockCost' :
+      (ds.saleQty !== undefined ? 'saleQty' :
+      (ds.salePrice !== undefined ? 'salePrice' : '')))),
+    selStart: (typeof a.selectionStart === 'number') ? a.selectionStart : null,
+    selEnd: (typeof a.selectionEnd === 'number') ? a.selectionEnd : null,
+  };
+}
+function restoreFocus_(snapshot) {
+  if (!snapshot) return;
+  const { key, type, selStart, selEnd } = snapshot;
+
+  let q = null;
+  if (type === 'restockQty') q = `input[data-restock-qty="${cssEscape_(key)}"]`;
+  else if (type === 'restockCost') q = `input[data-restock-cost="${cssEscape_(key)}"]`;
+  else if (type === 'saleQty') q = `input[data-sale-qty="${cssEscape_(key)}"]`;
+  else if (type === 'salePrice') q = `input[data-sale-price="${cssEscape_(key)}"]`;
+
+  if (!q) return;
+  const el = document.querySelector(q);
+  if (!(el instanceof HTMLInputElement)) return;
+
+  el.focus({ preventScroll: true });
+  if (selStart !== null && selEnd !== null) {
+    try { el.setSelectionRange(selStart, selEnd); } catch {}
+  }
+}
+
+/* =========================
+   Boot
+========================= */
 export function boot() {
+  // Anti doble-boot duro (por si el módulo se evalúa más de una vez)
+  try {
+    if (window.__STORE_APP_BOOTED_V617__) return;
+    window.__STORE_APP_BOOTED_V617__ = true;
+  } catch {}
+
   const CFG =
     (window.STORE_CFG && typeof window.STORE_CFG === 'object' ? window.STORE_CFG : null) ||
     (globalThis.CFG && typeof globalThis.CFG === 'object' ? globalThis.CFG : null) ||
@@ -89,6 +167,17 @@ export function boot() {
   const $ = (id) => document.getElementById(id);
   const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
   const on = (node, ev, fn, opts) => node && node.addEventListener(ev, fn, opts);
+
+  // Para arreglar el “cierro y se guarda”: solo guardamos si el submitter fue el botón Guardar.
+  function submitterId_(ev) {
+    // submitter soportado en la mayoría de browsers modernos
+    const s = ev?.submitter;
+    if (s && s.id) return String(s.id);
+    // fallback: si el activeElement es botón dentro del form
+    const a = document.activeElement;
+    if (a && a instanceof HTMLElement && a.id) return String(a.id);
+    return '';
+  }
 
   /* =========================
      Elements (NO invento IDs)
@@ -181,6 +270,16 @@ export function boot() {
     p_desc: $('p_desc'),
     p_image: $('p_image'),
 
+    // ✅ Nuevo opcional: precio de competencia (manual)
+    // Si no existe en tu HTML, queda null y no molesta.
+    p_competitor_price:
+      $('p_competitor_price') ||
+      $('p_comp_price') ||
+      $('p_price_comp') ||
+      $('p_competencia') ||
+      $('p_precio_competencia') ||
+      null,
+
     modalStock: $('modalStock'),
     stockForm: $('stockForm'),
     btnSaveStock: $('btnSaveStock'),
@@ -200,9 +299,7 @@ export function boot() {
     restockTotalCost: $('restockTotalCost'),
     btnClearRestock: $('btnClearRestock'),
     btnPrintRestock: $('btnPrintRestock'),
-
-    // optional: close button (si existe)
-    btnCloseRestock: $('btnCloseRestock'),
+    btnCloseRestock: $('btnCloseRestock'), // optional
   };
 
   /* =========================
@@ -277,6 +374,16 @@ export function boot() {
 
   function pickPriceCOP_(p) { return toInt(p?.price_cop ?? p?.price ?? p?.precio_cop ?? p?.precio); }
   function pickCostCOP_(p) { return toInt(p?.cost_cop ?? p?.cost ?? p?.costo_cop ?? p?.costo); }
+  function pickCompetitorCOP_(p) {
+    return toInt(
+      p?.competitor_price_cop ??
+      p?.competitor_price ??
+      p?.precio_competencia ??
+      p?.precio_competencia_cop ??
+      p?.precioCompetencia ??
+      p?.precioCompetenciaCOP
+    );
+  }
 
   function nowLocalStamp_() {
     const d = new Date();
@@ -327,7 +434,6 @@ export function boot() {
     if (el.viewAuth) el.viewAuth.hidden = (name !== 'auth');
     if (el.viewApp) el.viewApp.hidden = (name !== 'app');
 
-    // ✅ Restock solo en app
     if (el.btnRestockOpen) el.btnRestockOpen.hidden = (name !== 'app');
   }
 
@@ -433,7 +539,6 @@ export function boot() {
     BUSY_DLG = d;
     BUSY_DLG._textEl = txt;
 
-    // bloquea ESC cuando busy
     d.addEventListener('cancel', (ev) => { if (State.get()?.busy) ev.preventDefault(); });
 
     return BUSY_DLG;
@@ -496,14 +601,12 @@ export function boot() {
     return TAB_IDS.includes(t) ? t : 'catalog';
   }
 
-  // guard anti-renders múltiples en cascada
   let RENDER_GUARD = 0;
 
   function showTab(tabName) {
     const next = TAB_IDS.includes(tabName) ? tabName : 'catalog';
     const prev = currentTab_();
 
-    // si ya estás ahí, no hagas show + lazy load de nuevo
     if (prev === next) {
       renderActive_();
       return;
@@ -512,7 +615,6 @@ export function boot() {
     State.setTab(next);
 
     if (Array.isArray(el.tabs) && el.tabs.length) {
-      // rápido: un loop sobre tabs reales, no sobre TAB_IDS buscando
       el.tabs.forEach(btn => {
         const t = btn?.dataset?.tab;
         if (!t) return;
@@ -525,7 +627,6 @@ export function boot() {
       if (sec) sec.hidden = (n !== next);
     });
 
-    // Lazy load por tab (sin renderizar todo)
     const after = () => renderActive_();
 
     if (next === 'catalog') ensureProductsLoaded_().finally(after);
@@ -548,7 +649,6 @@ export function boot() {
     if (el.salePane) el.salePane.hidden = !isOpen;
     if (el.salesEmpty) el.salesEmpty.hidden = isOpen || hasOrders;
 
-    // orders pane siempre visible en sales (si existe)
     if (el.ordersPane) el.ordersPane.hidden = false;
   }
 
@@ -627,10 +727,11 @@ export function boot() {
       const total = fmtCOP(toInt(o.total_cop));
       const notes = String(o.notes || '').trim();
 
-      const openBtn = `<button class="btn btn--tiny btn--ghost" data-order-open="${escapeHtml(String(o.id || ''))}">Abrir</button>`;
-      const payBtn  = `<button class="btn btn--tiny btn--primary" data-order-pay="${escapeHtml(String(o.id || ''))}">Marcar pagado</button>`;
+      const oid = escapeHtml(String(o.id || ''));
+      const openBtn = `<button class="btn btn--tiny btn--ghost" data-order-open="${oid}">Abrir</button>`;
+      const payBtn  = `<button class="btn btn--tiny btn--primary" data-order-pay="${oid}">Marcar pagado</button>`;
       const delBtn  = (st.ordersSource === 'local')
-        ? `<button class="btn btn--tiny btn--ghost" data-order-del="${escapeHtml(String(o.id || ''))}">Eliminar</button>`
+        ? `<button class="btn btn--tiny btn--ghost" data-order-del="${oid}">Eliminar</button>`
         : '';
 
       return `
@@ -962,7 +1063,7 @@ export function boot() {
       else if (tab === 'dashboard') renderDashboard_();
       else if (tab === 'sales') { renderOrders_(); scheduleSaleRender_(); syncSalesUI_(); }
       else if (tab === 'moves') renderMoves_();
-      else if (tab === 'restock') renderRestock_();
+      else if (tab === 'restock') scheduleRestockRender_();
     });
   }
 
@@ -1007,18 +1108,19 @@ export function boot() {
     if (!el.catalogBody) return;
 
     const st = State.get();
-    const q = String(el.qCatalog?.value || '').toLowerCase().trim();
+    const rawQ = el.qCatalog?.value || '';
+    const q = String(rawQ).toLowerCase().trim();
 
-    const list = (st.products || []).filter(p => {
-      if (!q) return true;
-      return (
-        String(p.id || '').toLowerCase().includes(q) ||
-        String(p.name || '').toLowerCase().includes(q) ||
-        String(p.brand || '').toLowerCase().includes(q) ||
-        String(p.category || '').toLowerCase().includes(q) ||
-        String(p.sku || '').toLowerCase().includes(q)
-      );
-    });
+    const src = Array.isArray(st.products) ? st.products : [];
+    const list = q
+      ? src.filter(p => p && (
+          String(p.id || '').toLowerCase().includes(q) ||
+          String(p.name || '').toLowerCase().includes(q) ||
+          String(p.brand || '').toLowerCase().includes(q) ||
+          String(p.category || '').toLowerCase().includes(q) ||
+          String(p.sku || '').toLowerCase().includes(q)
+        ))
+      : src;
 
     if (!list.length) {
       el.catalogBody.innerHTML = `<tr><td colspan="8" class="muted">No hay resultados.</td></tr>`;
@@ -1038,6 +1140,11 @@ export function boot() {
         : '';
 
       const price = pickPriceCOP_(p);
+
+      // ✅ Precio de competencia opcional (si existe en data)
+      const comp = pickCompetitorCOP_(p);
+      const compLine = comp > 0 ? ` · <span class="mono">Comp:</span> <span class="mono">${escapeHtml(fmtCOP(comp))}</span>` : '';
+
       const restockBtn = `<button class="btn btn--tiny btn--ghost" data-act="restock_add" data-id="${escapeHtml(p.id)}">Restock</button>`;
 
       return `
@@ -1045,7 +1152,9 @@ export function boot() {
           <td class="mono">${escapeHtml(p.id)}</td>
           <td>
             <div class="cellTitle">${escapeHtml(p.name || '')}</div>
-            <div class="cellSub muted tiny">${escapeHtml(p.desc || '')}</div>
+            <div class="cellSub muted tiny">
+              ${escapeHtml(p.desc || '')}${compLine}
+            </div>
           </td>
           <td>${escapeHtml(p.brand || '')}</td>
           <td>${escapeHtml(p.category || '')}</td>
@@ -1070,19 +1179,21 @@ export function boot() {
     const st = State.get();
     const idx = State.productsIndex();
 
-    const q = String(el.qInventory?.value || '').toLowerCase().trim();
-    const list = (st.inventory || []).filter(r => {
-      if (!q) return true;
+    const rawQ = el.qInventory?.value || '';
+    const q = String(rawQ).toLowerCase().trim();
 
-      const pid = String(r.product_id || '').toLowerCase();
-      const p = idx.get(String(r.product_id || '').trim());
-      const name = String(p?.name || '').toLowerCase();
-      const brand = String(p?.brand || '').toLowerCase();
-      const cat = String(p?.category || '').toLowerCase();
-      const loc = String(r.location || '').toLowerCase();
-
-      return pid.includes(q) || name.includes(q) || brand.includes(q) || cat.includes(q) || loc.includes(q);
-    });
+    const src = Array.isArray(st.inventory) ? st.inventory : [];
+    const list = q
+      ? src.filter(r => {
+          const pid = String(r?.product_id || '').toLowerCase();
+          const p = idx.get(String(r?.product_id || '').trim());
+          const name = String(p?.name || '').toLowerCase();
+          const brand = String(p?.brand || '').toLowerCase();
+          const cat = String(p?.category || '').toLowerCase();
+          const loc = String(r?.location || '').toLowerCase();
+          return pid.includes(q) || name.includes(q) || brand.includes(q) || cat.includes(q) || loc.includes(q);
+        })
+      : src;
 
     if (!list.length) {
       el.inventoryBody.innerHTML = `<tr><td colspan="5" class="muted">No hay resultados.</td></tr>`;
@@ -1156,7 +1267,7 @@ export function boot() {
     State.set({ movesQuery: query }, { sys: true });
 
     const key = `q=${query}|limit=200`;
-    if (MOVES.inflight && MOVES.lastKey === key) return;
+    if (MOVES.inflight && MOVES.lastKey === key) return MOVES.inflight;
 
     MOVES.lastKey = key;
     const myId = ++MOVES.reqId;
@@ -1278,18 +1389,25 @@ export function boot() {
     scheduleSaleRender_();
   }
 
-  // PERF: batch render sale to avoid input lag
   let SALE_RAF = 0;
-  function scheduleSaleRender_() {
+  const scheduleSaleRender_ = () => {
     cancelAnimationFrame(SALE_RAF);
     SALE_RAF = requestAnimationFrame(() => {
       renderSaleItems_();
       SALE_RAF = 0;
     });
+  };
+
+  function updateSaleTotalOnly_(items) {
+    if (!el.saleTotal) return;
+    const total = (items || []).reduce((acc, it) => acc + (Math.max(1, toInt(it.qty)) * Math.max(0, toInt(it.unit_price))), 0);
+    el.saleTotal.textContent = fmtCOP(total);
   }
 
   function renderSaleItems_() {
     if (!el.saleItemsBody || !el.saleTotal) return;
+
+    const snap = captureFocus_();
 
     const st = State.get();
     const items = Array.isArray(st.saleItems) ? st.saleItems : [];
@@ -1297,6 +1415,7 @@ export function boot() {
     if (!items.length) {
       el.saleItemsBody.innerHTML = `<tr><td colspan="5" class="muted">Sin items…</td></tr>`;
       el.saleTotal.textContent = fmtCOP(0);
+      restoreFocus_(snap);
       return;
     }
 
@@ -1326,6 +1445,7 @@ export function boot() {
     }).join('');
 
     el.saleTotal.textContent = fmtCOP(total);
+    restoreFocus_(snap);
   }
 
   async function saveSale_() {
@@ -1508,10 +1628,14 @@ export function boot() {
 
     const price = pickPriceCOP_(p);
     const cost = pickCostCOP_(p);
+    const comp = pickCompetitorCOP_(p);
 
     if (el.p_price) el.p_price.value = String(price);
     if (el.p_cost) el.p_cost.value = String(cost);
     if (el.p_margin) el.p_margin.value = cost ? String(computeMarginFromCostPrice_(cost, price)) : '';
+
+    // ✅ competitivo opcional
+    if (el.p_competitor_price) el.p_competitor_price.value = comp ? String(comp) : '';
 
     if (el.p_desc) el.p_desc.value = p?.desc || '';
     if (el.p_image) el.p_image.value = p?.image_url || '';
@@ -1525,6 +1649,9 @@ export function boot() {
     const price = toInt(el.p_price?.value);
     const margin = el.p_margin ? Math.max(0, toFloat(el.p_margin.value)) : 0;
 
+    // ✅ competitivo opcional
+    const comp = el.p_competitor_price ? toInt(el.p_competitor_price.value) : 0;
+
     return {
       id,
       active: el.p_active?.value === 'true',
@@ -1536,9 +1663,16 @@ export function boot() {
       price_cop: price,
       cost_cop: cost,
 
+      // compat keys
       price, cost,
       precio_cop: price, costo_cop: cost,
       precio: price, costo: cost,
+
+      // ✅ campo nuevo (varios alias por si tu backend/Sheet usa otro nombre)
+      competitor_price_cop: comp,
+      competitor_price: comp,
+      precio_competencia: comp,
+      precio_competencia_cop: comp,
 
       margin_pct: margin,
       desc: safeStr_(el.p_desc?.value, 4000),
@@ -1627,12 +1761,26 @@ export function boot() {
     return !!(el.restockBody && (el.restockTotalUnits || el.restockTotalCost));
   }
 
+  const RESTOCK_VER = { v: 0 };
+  let RESTOCK_RAF = 0;
+  const scheduleRestockRender_ = () => {
+    const myV = ++RESTOCK_VER.v;
+    cancelAnimationFrame(RESTOCK_RAF);
+    RESTOCK_RAF = requestAnimationFrame(() => {
+      if (myV !== RESTOCK_VER.v) return;
+      renderRestock_();
+      RESTOCK_RAF = 0;
+    });
+  };
+
   function renderRestock_() {
     if (!restockUIEnabled_()) return;
 
+    const snap = captureFocus_();
+
     const r = State.getRestock();
-    if (el.restockSupplier) el.restockSupplier.value = r.supplier || '';
-    if (el.restockNotes) el.restockNotes.value = r.notes || '';
+    if (el.restockSupplier && el.restockSupplier.value !== String(r.supplier || '')) el.restockSupplier.value = r.supplier || '';
+    if (el.restockNotes && el.restockNotes.value !== String(r.notes || '')) el.restockNotes.value = r.notes || '';
 
     const items = Array.isArray(r.items) ? r.items : [];
     const totals = State.restockTotals();
@@ -1641,6 +1789,7 @@ export function boot() {
       el.restockBody.innerHTML = `<tr><td colspan="5" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>`;
       if (el.restockTotalUnits) el.restockTotalUnits.textContent = '0';
       if (el.restockTotalCost) el.restockTotalCost.textContent = fmtCOP(0);
+      restoreFocus_(snap);
       return;
     }
 
@@ -1680,6 +1829,8 @@ export function boot() {
     el.restockBody.innerHTML = rowsHtml;
     if (el.restockTotalUnits) el.restockTotalUnits.textContent = String(toInt(totals.units));
     if (el.restockTotalCost) el.restockTotalCost.textContent = fmtCOP(toInt(totals.cost_cop));
+
+    restoreFocus_(snap);
   }
 
   function openRestockUI_() {
@@ -1694,7 +1845,7 @@ export function boot() {
       return;
     }
 
-    renderRestock_();
+    scheduleRestockRender_();
 
     if (el.modalRestock && typeof el.modalRestock.showModal === 'function') {
       if (!el.modalRestock.open) el.modalRestock.showModal();
@@ -1721,7 +1872,7 @@ export function boot() {
     };
 
     State.restockAddProduct(product, 1);
-    renderRestock_();
+    scheduleRestockRender_();
     toast('Agregado a restock ✅', true);
 
     openRestockUI_();
@@ -1929,9 +2080,20 @@ export function boot() {
     on(el.btnSaveProduct, 'click', async () => { try { await saveProduct_(); } catch {} });
     on(el.btnSaveStock, 'click', async () => { try { await saveStock_(); } catch {} });
 
-    // (opcional) submits de forms si existen
-    on(el.productForm, 'submit', async (ev) => { ev.preventDefault(); try { await saveProduct_(); } catch {} });
-    on(el.stockForm, 'submit', async (ev) => { ev.preventDefault(); try { await saveStock_(); } catch {} });
+    // ✅ FIX: submit solo si fue el botón guardar (evita “cierro modal y guarda”)
+    on(el.productForm, 'submit', async (ev) => {
+      ev.preventDefault();
+      const sid = submitterId_(ev);
+      if (sid && el.btnSaveProduct && sid !== el.btnSaveProduct.id) return;
+      try { await saveProduct_(); } catch {}
+    });
+
+    on(el.stockForm, 'submit', async (ev) => {
+      ev.preventDefault();
+      const sid = submitterId_(ev);
+      if (sid && el.btnSaveStock && sid !== el.btnSaveStock.id) return;
+      try { await saveStock_(); } catch {}
+    });
 
     on(el.p_cost, 'input', () => {
       if (!el.p_margin) return;
@@ -1942,10 +2104,6 @@ export function boot() {
     on(el.p_price, 'input', () => syncMarginFromCostPrice_());
 
     on(el.btnRestockOpen, 'click', () => openRestockUI_());
-    document.addEventListener('click', (ev) => {
-      const t = ev.target?.closest?.('[data-restock-open]');
-      if (t) openRestockUI_();
-    });
 
     on(el.catalogBody, 'click', async (ev) => {
       const btn = ev.target?.closest?.('button');
@@ -2012,7 +2170,9 @@ export function boot() {
         if (!items[idx]) return;
         const next = items.map((it, i) => (i === idx ? { ...it, qty: v } : it));
         State.setSaleItems(next);
+        updateSaleTotalOnly_(next);
         scheduleSaleRender_();
+        return;
       }
 
       if (t.dataset.salePrice !== undefined) {
@@ -2021,6 +2181,7 @@ export function boot() {
         if (!items[idx]) return;
         const next = items.map((it, i) => (i === idx ? { ...it, unit_price: v } : it));
         State.setSaleItems(next);
+        updateSaleTotalOnly_(next);
         scheduleSaleRender_();
       }
     });
@@ -2053,12 +2214,13 @@ export function boot() {
       if (t.dataset.restockQty !== undefined) {
         const pid = String(t.dataset.restockQty || '').trim();
         State.restockSetQty(pid, Math.max(0, toInt(t.value)));
-        renderRestock_();
+        scheduleRestockRender_();
+        return;
       }
       if (t.dataset.restockCost !== undefined) {
         const pid = String(t.dataset.restockCost || '').trim();
         State.restockSetCost(pid, Math.max(0, toInt(t.value)));
-        renderRestock_();
+        scheduleRestockRender_();
       }
     });
 
@@ -2068,26 +2230,32 @@ export function boot() {
       if (btn.dataset.restockDel !== undefined) {
         const pid = String(btn.dataset.restockDel || '').trim();
         State.restockRemove(pid);
-        renderRestock_();
+        scheduleRestockRender_();
       }
     });
 
     on(el.btnClearRestock, 'click', () => {
       State.restockClear(true);
-      renderRestock_();
+      scheduleRestockRender_();
       toast('Restock limpiado 🧹', true);
     });
 
     on(el.btnPrintRestock, 'click', () => restockPrint_());
     on(el.btnCloseRestock, 'click', () => el.modalRestock?.close?.());
 
+    // ✅ Un solo listener global: restock open + tab restock (consolidado)
     document.addEventListener('click', (ev) => {
-      const b = ev.target?.closest?.('button');
+      const b = ev.target?.closest?.('[data-restock-open],button');
       if (!b) return;
 
+      if (b.matches?.('[data-restock-open]')) {
+        openRestockUI_();
+        return;
+      }
+
       if (b.dataset?.act === 'restock_open') openRestockUI_();
-      if (b.dataset?.tab === 'restock') showTab('restock');
-    });
+      if (b.dataset?.tab === 'restock' && tabSection_('restock')) showTab('restock');
+    }, { passive: true });
   }
 
   /* =========================
@@ -2134,7 +2302,6 @@ export function boot() {
 
         try { State.hydrateFromCache(); } catch {}
 
-        // Login load: dashboard + orders primero; products/inventory lazy por tab
         await loadAll_({ force: false });
         toast('Sesión activa ✅', true);
       } catch (err) {
@@ -2146,7 +2313,7 @@ export function boot() {
   }
 
   /* =========================
-     Boot
+     Boot init
   ========================= */
   function init_() {
     wireUI_();
@@ -2161,7 +2328,7 @@ export function boot() {
     showTab('catalog');
     syncSalesUI_();
     renderMoves_();
-    renderRestock_();
+    scheduleRestockRender_();
 
     try { if (el.modalRestock?.open) el.modalRestock.close(); } catch {}
   }
