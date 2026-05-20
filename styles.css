@@ -1,4 +1,4 @@
-:root{
+﻿:root{
   /* ==========================================================================
      Store · styles.css (LIGHT ONLY) — PRO+++ (pulido)
      - Mantiene clases/ids existentes: topbar, tabs, card, tablewrap, modal, toast, etc.
@@ -8,23 +8,23 @@
   ========================================================================== */
 
   /* Base */
-  --bg: #f6f8ff;
-  --bg2: #eef2ff;
-  --card: rgba(255,255,255,.86);
-  --card2: rgba(255,255,255,.94);
-  --text: #0b1020;
-  --muted: rgba(11,16,32,.65);
-  --line: rgba(11,16,32,.10);
+  --bg: #f5f1ea;
+  --bg2: #ebe4d8;
+  --card: rgba(255,255,255,.88);
+  --card2: #ffffff;
+  --text: #171717;
+  --muted: rgba(23,23,23,.62);
+  --line: rgba(23,23,23,.10);
 
   /* Accent (Musicala-ish, limpio) */
-  --a1:#0C41C4;  /* azul */
-  --a2:#680DBF;  /* violeta */
-  --a3:#CE0071;  /* magenta */
+  --a1: #8a6a3f;
+  --a2: #2f2a24;
+  --a3: #b08a54;
 
   /* Status */
-  --ok:  rgba(16,185,129,.18);
-  --bad: rgba(239,68,68,.14);
-  --warn: rgba(245,158,11,.18);
+  --ok: rgba(32,132,91,.14);
+  --bad: rgba(180,55,55,.12);
+  --warn: rgba(176,138,84,.18);
 
   /* Radii + shadows */
   --r-xl: 22px;
@@ -42,7 +42,7 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
 
   /* Layout */
-  --wrap: 1120px;
+  --wrap: 1540px;
 
   /* Focus */
   --focus: rgba(12,65,196,.18);
@@ -992,3 +992,201 @@ th[data-sort-active="true"] .thSortIcon{
   .card__actions .input--sm{ flex: 1 1 240px; min-width: 0; }
   .pill{ padding: 8px 10px; }
 }
+/* =========================
+   Musicala Store refinement
+========================= */
+body{
+  background:
+    radial-gradient(900px 420px at 18% -12%, rgba(176,138,84,.16), transparent 60%),
+    radial-gradient(760px 360px at 88% -8%, rgba(47,42,36,.08), transparent 58%),
+    linear-gradient(180deg, var(--bg), var(--bg2));
+}
+
+.wrap{
+  width: min(100%, var(--wrap));
+  max-width: none;
+  padding: calc(24px + var(--safe-top)) clamp(16px, 3vw, 42px) calc(32px + var(--safe-bottom));
+}
+
+.topbar{
+  background: rgba(245,241,234,.86);
+}
+
+.brand__logo,
+.authBrand__logo{
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: rgba(255,255,255,.78);
+  border: 1px solid rgba(23,23,23,.08);
+  box-shadow: 0 8px 18px rgba(47,42,36,.08);
+  flex: 0 0 auto;
+}
+.brand__logo:not([src]),
+.brand__logo[src=""],
+.authBrand__logo:not([src]),
+.authBrand__logo[src=""]{ display:none; }
+.brand__logo + .brand__dot,
+.authBrand__logo + .brand__dot{ display:none; }
+
+.brand__title{ letter-spacing: 0; }
+
+.auth{
+  grid-template-columns: minmax(320px, .88fr) minmax(280px, .62fr);
+  align-items: stretch;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-top: clamp(18px, 5vh, 54px);
+}
+.auth__card,
+.auth__side{
+  padding: clamp(20px, 3vw, 34px);
+}
+.auth__card{
+  min-height: 430px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.authBrand{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.authBrand .brand__dot{
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+.authNote{ margin: 2px 0 0; }
+.auth__side{
+  background: rgba(255,255,255,.74);
+}
+.list{ padding-left: 18px; }
+.list li{ margin: 10px 0; color: rgba(23,23,23,.74); }
+
+.card,
+.kpi,
+.tabs,
+.pill,
+.tablewrap{
+  box-shadow: 0 12px 32px rgba(47,42,36,.07);
+}
+
+.btn--primary{
+  color: #fff;
+  border-color: rgba(138,106,63,.68);
+  background: linear-gradient(180deg, #9b7848, #745630);
+  box-shadow: 0 12px 24px rgba(138,106,63,.18);
+}
+.btn--primary:hover{ border-color: rgba(47,42,36,.42); }
+.btn--ghost{ background: rgba(255,255,255,.70); }
+.btn--google{
+  width: 100%;
+  justify-content: center;
+  font-weight: 800;
+  min-height: 50px;
+}
+
+.input:focus,
+.miniNum:focus{
+  border-color: rgba(138,106,63,.52);
+  box-shadow: 0 0 0 4px rgba(176,138,84,.18);
+}
+:focus-visible,
+.btn:focus-visible,
+.input:focus-visible,
+.tab:focus-visible,
+.miniNum:focus-visible,
+.thSort:focus-visible{
+  box-shadow: 0 0 0 4px rgba(176,138,84,.22);
+}
+
+.tab.is-active,
+.tab[aria-selected="true"]{
+  border-color: rgba(138,106,63,.28);
+  box-shadow: 0 10px 22px rgba(138,106,63,.10);
+}
+
+.table{ min-width: 1040px; }
+.table thead th{ background: rgba(255,255,255,.94); }
+.table tbody tr:hover{ background: rgba(176,138,84,.08); }
+.cellSub{ max-width: 680px; }
+.actionsCell{
+  min-width: 250px;
+  white-space: normal;
+}
+.actionsCell .btn{
+  margin: 3px 0 3px 6px;
+}
+
+.productCell{
+  display:grid;
+  gap: 3px;
+  min-width: 260px;
+}
+.productCell__title,
+.productPreview__title{
+  font-weight: 800;
+  color: var(--text);
+}
+.productCell__meta,
+.productPreview__meta{
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.productCell__id{
+  color: rgba(23,23,23,.46);
+  font-size: 11px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.productPreview{
+  margin-top: 8px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(176,138,84,.22);
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 8px 18px rgba(47,42,36,.05);
+}
+.productPreview__stock{
+  margin-top: 4px;
+  color: rgba(23,23,23,.72);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge{
+  border-color: rgba(32,132,91,.18);
+}
+.badge--off,
+.badge.is-bad{
+  border-color: rgba(180,55,55,.18);
+}
+.badge--warn,
+.badge.is-warn{
+  border-color: rgba(176,138,84,.24);
+}
+
+.spinner{ border-top-color: rgba(138,106,63,.82); }
+.restockBadge{
+  background: rgba(176,138,84,.18);
+  border-color: rgba(138,106,63,.22);
+}
+
+@media (max-width: 920px){
+  .auth{ grid-template-columns: 1fr; padding-top: 10px; }
+  .auth__card{ min-height: 0; }
+}
+@media (max-width: 520px){
+  .wrap{ padding: calc(14px + var(--safe-top)) calc(12px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(12px + var(--safe-left)); }
+  .brand__logo{ width: 34px; height: 34px; }
+  .auth__card,.auth__side{ padding: 18px; }
+}
+
+
+[hidden]{ display:none !important; }
+
