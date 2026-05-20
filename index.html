@@ -1,19 +1,19 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="es-CO">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="color-scheme" content="light" />
-  <meta name="theme-color" content="#f6f8ff" />
+  <meta name="theme-color" content="#f5f1ea" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
 
-  <title>Store · Manager</title>
-  <meta name="description" content="Store interno: catálogo, inventario, ventas y movimientos. (Sheets + Apps Script + Firebase Auth)" />
+  <title>Musicala Store · Manager interno</title>
+  <meta name="description" content="Musicala Store interno: catálogo, inventario, ventas y movimientos." />
 
   <!-- Open Graph -->
-  <meta property="og:title" content="Store · Manager" />
-  <meta property="og:description" content="Catálogo, inventario, ventas y auditoría interna (Sheets + Apps Script + Firebase Auth)." />
+  <meta property="og:title" content="Musicala Store · Manager interno" />
+  <meta property="og:description" content="Catálogo, inventario, ventas y auditoría interna." />
   <meta property="og:type" content="website" />
 
   <!-- Performance hints -->
@@ -26,6 +26,7 @@
   <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
   <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="icon" type="image/png" href="./assets/logo.png" />
 
   <!-- CSP (segura sin romper módulos; inline permitido porque hay inline scripts) -->
   <meta http-equiv="Content-Security-Policy" content="
@@ -33,10 +34,6 @@
     base-uri 'self';
     object-src 'none';
     form-action 'self';
-    frame-ancestors 'self';
-    upgrade-insecure-requests;
-    block-all-mixed-content;
-
     script-src
       'self'
       https://www.gstatic.com
@@ -56,7 +53,8 @@
       https://script.googleusercontent.com
       https://www.googleapis.com
       https://identitytoolkit.googleapis.com
-      https://securetoken.googleapis.com;
+      https://securetoken.googleapis.com
+      https://cdn.jsdelivr.net;
 
     frame-src
       'self'
@@ -67,7 +65,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-02-26.2";
+    window.__BUILD__ = "2026-05-20.1";
   </script>
 
   <!-- CSS -->
@@ -179,7 +177,7 @@
       border:0 !important;
     }
 
-    /* Toast: en tu HTML estaba hidden; así funciona aunque app.js no lo “arregle” */
+    /* Toast: asegura que los mensajes se oculten cuando corresponde. */
     .toast[hidden]{ display:none !important; }
 
     @media print{
@@ -206,10 +204,11 @@
   <!-- Topbar -->
   <header class="topbar" role="banner">
     <div class="topbar__left">
-      <div class="brand" aria-label="Marca Store">
+      <div class="brand" aria-label="Musicala Store">
+        <img class="brand__logo" src="./assets/logo.png" alt="Musicala Store" />
         <div class="brand__dot" aria-hidden="true"></div>
         <div class="brand__text">
-          <div class="brand__title">Store</div>
+          <div class="brand__title">Musicala Store</div>
           <div class="brand__sub">Manager interno</div>
         </div>
       </div>
@@ -244,65 +243,42 @@
     <section class="panel" id="viewLoading" data-view="loading" aria-label="Cargando">
       <div class="center">
         <div class="spinner" aria-hidden="true"></div>
-        <h1 class="h1">Cargando Store…</h1>
+        <h1 class="h1">Cargando Musicala Store…</h1>
         <p class="muted">Validando sesión y preparando datos.</p>
-        <p class="tiny muted" style="margin-top:10px;">Build: <span class="mono" id="buildTopHint">—</span></p>
       </div>
     </section>
 
     <!-- AUTH -->
     <section class="panel" id="viewAuth" data-view="auth" hidden aria-label="Inicio de sesión">
       <div class="auth">
-        <div class="card auth__card">
-          <h1 class="h1">Iniciar sesión</h1>
-          <p class="muted">Acceso interno. Si no estás en la lista, no entras.</p>
+                <div class="card auth__card">
+          <div class="authBrand">
+            <img class="authBrand__logo" src="./assets/logo.png" alt="Musicala Store" />
+            <div class="brand__dot" aria-hidden="true"></div>
+          </div>
+          <h1 class="h1">Musicala Store</h1>
+          <p class="muted">Acceso interno para gestión de catálogo, inventario y ventas.</p>
 
-          <form id="loginForm" class="form" autocomplete="on" novalidate>
-            <label class="field">
-              <span class="label">Correo</span>
-              <input class="input" id="email" name="email" type="email" placeholder="correo@dominio.com"
-                required autocomplete="email" inputmode="email" />
-            </label>
-
-            <label class="field">
-              <span class="label">Contraseña</span>
-              <input class="input" id="password" name="password" type="password" placeholder="••••••••"
-                required autocomplete="current-password" />
-            </label>
-
-            <div class="row">
-              <button class="btn btn--primary" id="btnLogin" type="submit">Entrar</button>
-              <button class="btn btn--ghost" id="btnGoogle" type="button"
-                title="Requiere Google provider habilitado en Firebase Auth">
-                Entrar con Google
-              </button>
-            </div>
-
-            <div class="hint">
-              <span class="kbd">Tip</span>
-              <span class="muted">Si usan solo Google, pueden ocultar el login por contraseña luego.</span>
-            </div>
-          </form>
-
-          <div class="divider"></div>
-
-          <div class="tiny muted">
-            <div><strong>Estado:</strong> <span id="authStatus">Listo</span></div>
-            <div><strong>API:</strong> <span class="mono" id="apiHint">—</span></div>
-            <div><strong>Build:</strong> <span class="mono" id="buildHint">—</span></div>
+          <div class="form" id="loginPanel">
+            <button class="btn btn--primary btn--google" id="btnGoogle" type="button">
+              Continuar con Google
+            </button>
+            <p class="tiny muted authNote" id="authStatus" role="status" aria-live="polite">
+              Acceso restringido al equipo autorizado.
+            </p>
           </div>
         </div>
 
         <div class="card auth__side">
-          <h2 class="h2">Qué puedes hacer aquí</h2>
+          <h2 class="h2">Gestión interna</h2>
           <ul class="list">
-            <li>📦 Catálogo: crear/editar/activar productos</li>
-            <li>📊 Inventario: ajustes y alertas por mínimo</li>
-            <li>🧾 Ventas: carrito, total en vivo, registro</li>
-            <li>🧠 Auditoría: movimientos de inventario</li>
-            <li>🧺 Restock: pedido a proveedor descargable en PDF</li>
+            <li>Catálogo: crear, editar y activar productos.</li>
+            <li>Inventario: ajustes, mínimos y alertas.</li>
+            <li>Ventas: carrito, totales y registro.</li>
+            <li>Movimientos: auditoría de inventario.</li>
+            <li>Restock: pedido a proveedor descargable en PDF.</li>
           </ul>
-          <p class="muted tiny">Todo se guarda en Sheets, con historial real.</p>
+          <p class="muted tiny">Operación centralizada para el equipo Musicala.</p>
         </div>
       </div>
     </section>
@@ -363,11 +339,6 @@
           <table class="table" id="tblCatalog" aria-label="Tabla de productos">
             <thead>
               <tr>
-                <th data-sort-key="id">
-                  <button class="thSort" type="button" data-sort="id" aria-label="Ordenar por ID">
-                    <span>ID</span><span class="thSortIcon" aria-hidden="true">↕</span>
-                  </button>
-                </th>
                 <th data-sort-key="name">
                   <button class="thSort" type="button" data-sort="name" aria-label="Ordenar por Producto">
                     <span>Producto</span><span class="thSortIcon" aria-hidden="true">↕</span>
@@ -402,7 +373,7 @@
               </tr>
             </thead>
             <tbody id="catalogBody">
-              <tr><td colspan="8" class="muted">Cargando…</td></tr>
+              <tr><td colspan="7" class="muted">Cargando…</td></tr>
             </tbody>
           </table>
         </div>
@@ -418,7 +389,8 @@
 
           <div class="card__actions" aria-label="Acciones de inventario" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
             <label class="sr-only" for="qInventory">Buscar en inventario</label>
-            <input class="input input--sm" id="qInventory" type="search" autocomplete="off" placeholder="Buscar por ID producto…" />
+            <input class="input input--sm" id="qInventory" type="search" autocomplete="off"
+              placeholder="Buscar producto, marca, SKU, categoría, ubicación…" />
             <button class="btn btn--primary" id="btnAdjustStock" type="button">Ajustar stock</button>
           </div>
         </div>
@@ -427,9 +399,9 @@
           <table class="table" id="tblInventory" aria-label="Tabla de inventario">
             <thead>
               <tr>
-                <th data-sort-key="product_id">
-                  <button class="thSort" type="button" data-sort="product_id" aria-label="Ordenar por Producto ID">
-                    <span>Producto ID</span><span class="thSortIcon" aria-hidden="true">↕</span>
+                <th data-sort-key="product">
+                  <button class="thSort" type="button" data-sort="product" aria-label="Ordenar por Producto">
+                    <span>Producto</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
                 <th class="num" data-sort-key="stock">
@@ -452,10 +424,11 @@
                     <span>Actualizado</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
+                <th class="num">Acciones</th>
               </tr>
             </thead>
             <tbody id="inventoryBody">
-              <tr><td colspan="5" class="muted">Cargando…</td></tr>
+              <tr><td colspan="6" class="muted">Cargando…</td></tr>
             </tbody>
           </table>
         </div>
@@ -698,7 +671,7 @@
           <h3 class="h3">🧺 Pedido a proveedor (Restock)</h3>
           <p class="muted tiny">Agrega ítems desde Catálogo → ajusta cantidades → descarga PDF.</p>
         </div>
-        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+        <button class="btn btn--ghost" id="btnCloseRestock" type="button" data-close-dialog="modalRestock">Cerrar</button>
       </div>
 
       <div class="restockGrid">
@@ -865,13 +838,32 @@
           <h3 class="h3">Ajuste de inventario</h3>
           <p class="muted tiny">Esto crea movimiento y actualiza stock.</p>
         </div>
-        <button class="btn btn--ghost" value="cancel" type="submit">Cerrar</button>
+        <button class="btn btn--ghost" id="btnCloseStockTop" type="button" data-close-dialog="modalStock">Cerrar</button>
       </div>
 
       <div class="grid2">
         <label class="field" style="grid-column: 1 / -1;">
-          <span class="label">Producto ID</span>
-          <input class="input" id="s_product_id" type="text" placeholder="P…" required />
+          <span class="label">Producto</span>
+          <input
+            class="input"
+            id="s_product_query"
+            type="search"
+            list="inventoryProductsList"
+            placeholder="Buscar por nombre, marca, SKU o categoría…"
+            autocomplete="off"
+            required
+          />
+          <datalist id="inventoryProductsList"></datalist>
+          <input id="s_product_id" type="hidden" />
+          <div class="productPreview" id="stockProductPreview" hidden></div>
+        </label>
+
+        <label class="field">
+          <span class="label">Modo de ajuste</span>
+          <select class="input" id="s_mode">
+            <option value="delta">Sumar o restar unidades</option>
+            <option value="set">Establecer stock real contado</option>
+          </select>
         </label>
 
         <label class="field">
@@ -885,7 +877,7 @@
         </label>
 
         <label class="field">
-          <span class="label">Cantidad (+ / -)</span>
+          <span class="label" id="s_qty_label">Cantidad (+ / -)</span>
           <input class="input" id="s_qty" type="number" step="1" inputmode="numeric" required />
         </label>
 
@@ -902,117 +894,46 @@
 
       <div class="modal__foot">
         <button class="btn btn--primary" id="btnSaveStock" type="button">Aplicar</button>
-        <button class="btn btn--ghost" value="cancel" type="submit">Cancelar</button>
+        <button class="btn btn--ghost" id="btnCancelStock" type="button" data-close-dialog="modalStock">Cancelar</button>
       </div>
     </form>
   </dialog>
 
-  <!-- CONFIG -->
-  <script>
-    const API_BASE_RAW = "https://script.google.com/macros/s/AKfycbwSia20JcoC2GtB7UZ1dkESkmT_wF6VpmPmEDWpfHytSzk3G0evSict-li0B5PFJH2e9Q/exec";
-    const API_BASE = String(API_BASE_RAW || "").trim().replace(/\/+$/, "");
+  <!-- Modal: Inventory meta -->
+  <dialog class="modal" id="modalInventoryMeta" aria-label="Editar mínimo y ubicación">
+    <form method="dialog" class="modal__card" id="inventoryMetaForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">Editar mínimo y ubicación</h3>
+          <p class="muted tiny">Esto no cambia stock ni crea movimientos.</p>
+        </div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalInventoryMeta">Cerrar</button>
+      </div>
 
-    window.STORE_CFG = Object.freeze({
-      API_BASE,
-      CURRENCY: "COP",
-      LOCALE: "es-CO",
-      BUILD: window.__BUILD__ || "2026-02-26.2",
-      API_TIMEOUT_MS: 25000,
-      API_FORCE_POST: true,
-      API_COALESCE: true,
-      API_JSONP_FALLBACK: false
-    });
-  </script>
+      <input id="im_product_id" type="hidden" />
+      <div class="productPreview" id="inventoryMetaPreview" hidden></div>
 
-  <!-- Firebase + Boot -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
-    import {
-      getAuth,
-      onAuthStateChanged,
-      signInWithEmailAndPassword,
-      signInWithPopup,
-      GoogleAuthProvider,
-      signOut
-    } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+      <div class="grid2" style="margin-top:12px;">
+        <label class="field">
+          <span class="label">Mínimo</span>
+          <input class="input" id="im_min_stock" type="number" min="0" step="1" inputmode="numeric" />
+        </label>
+        <label class="field">
+          <span class="label">Ubicación</span>
+          <input class="input" id="im_location" type="text" placeholder="Vitrina, bodega, pared..." />
+        </label>
+      </div>
 
-    // UI hints
-    const build = (window.STORE_CFG && window.STORE_CFG.BUILD) ? window.STORE_CFG.BUILD : "—";
-    const api = (window.STORE_CFG && window.STORE_CFG.API_BASE) ? window.STORE_CFG.API_BASE : "—";
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveInventoryMeta" type="button">Guardar</button>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalInventoryMeta">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
 
-    const buildHint = document.getElementById("buildHint");
-    if (buildHint) buildHint.textContent = build;
-
-    const buildTopHint = document.getElementById("buildTopHint");
-    if (buildTopHint) buildTopHint.textContent = build;
-
-    const apiHint = document.getElementById("apiHint");
-    if (apiHint) apiHint.textContent = api;
-
-    const firebaseConfig = Object.freeze({
-      apiKey: "AIzaSyBm8RWGMxw9uz4iMmr0Chf3uiLzMY7TzOE",
-      authDomain: "store2026-77c54.firebaseapp.com",
-      projectId: "store2026-77c54",
-      storageBucket: "store2026-77c54.firebasestorage.app",
-      messagingSenderId: "190041780965",
-      appId: "1:190041780965:web:a594ed82ca71f826f3da0c"
-    });
-
-    const fbApp = initializeApp(firebaseConfig);
-    const auth = getAuth(fbApp);
-
-    const googleProvider = new GoogleAuthProvider();
-    // googleProvider.setCustomParameters({ prompt: "select_account" });
-
-    window.__FB__ = Object.freeze({
-      auth,
-      onAuthStateChanged,
-      signInWithEmailAndPassword,
-      signInWithPopup,
-      GoogleAuthProvider,
-      googleProvider,
-      signOut
-    });
-
-    // Airbag anti-typo legacy
-    window.setsetViewSafe_ = window.setsetViewSafe_ || function(v){
-      try { document.body.dataset.view = String(v || 'loading'); } catch {}
-    };
-
-    // Mostrar/ocultar botón Restock + user pill según auth
-    const restockBtn = document.getElementById("btnRestockOpen");
-    const userPill = document.getElementById("userPill");
-    onAuthStateChanged(auth, (user) => {
-      if (restockBtn) restockBtn.hidden = !user;
-      if (userPill) userPill.hidden = !user;
-    });
-
-    // ✅ Cierre “seguro” de modales (sin submit)
-    const closeButtons = document.querySelectorAll("[data-close-dialog]");
-    closeButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const id = btn.getAttribute("data-close-dialog");
-        const dlg = document.getElementById(id);
-        try { dlg && dlg.close(); } catch {}
-      });
-    });
-
-    // Cache-busting del app.js
-    const v = encodeURIComponent((window.STORE_CFG && window.STORE_CFG.BUILD) || "");
-    const appUrl = v ? `./app.js?v=${v}` : "./app.js";
-
-    try {
-      const mod = await import(appUrl);
-      if (!mod || typeof mod.boot !== "function") {
-        console.error("app.js cargó pero no expone boot()");
-        alert("Error: app.js no expone boot(). Revisa el export en app.js.");
-      } else {
-        mod.boot();
-      }
-    } catch (e) {
-      console.error("Error cargando app.js:", e);
-      alert("Error cargando la app. Revisa consola (F12).");
-    }
-  </script>
+  <script type="module" src="./js/main.js"></script>
 </body>
 </html>
+
+
+
