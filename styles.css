@@ -1190,3 +1190,21 @@ body{
 
 [hidden]{ display:none !important; }
 
+/* Ajustes de uso diario: jerarquía suave, sin cambiar la identidad visual. */
+.auth{ max-width:1120px; margin-inline:auto; }
+.auth__side{ align-self:center; }
+.btn--google{ min-height:48px; box-shadow:0 8px 18px rgba(138,106,63,.14); }
+.tabs{ gap:6px; scroll-padding-inline:8px; }
+.tab{ font-weight:720; }
+.tab.is-active,.tab[aria-selected="true"]{ transform:translateY(-1px); }
+.orderBalance{ display:inline-flex; align-items:center; margin-top:5px; padding:3px 8px; border-radius:999px; background:rgba(176,138,84,.13); color:#725018; font-size:12px; font-weight:800; }
+.orderStatus{ display:inline-flex; margin-top:5px; color:rgba(23,23,23,.58); font-size:12px; font-weight:700; }
+@media (max-width: 920px){ .auth__side{ display:none; } }
+@media (max-width: 520px){
+  .tabs{ margin-inline:-4px; padding-inline:4px; }
+  .tabs__spacer{ display:none; }
+  .tabs > .btn{ flex:0 0 auto; }
+  .tab{ padding-inline:12px; }
+  .card__actions .btn--primary{ width:100%; }
+}
+

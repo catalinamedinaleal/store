@@ -767,7 +767,7 @@ export function boot() {
           <td class="tiny muted">${escapeHtml(d || '')}</td>
           <td>${escapeHtml(cust)}</td>
           <td class="num mono">${escapeHtml(total)}</td>
-          <td class="tiny">${escapeHtml(notes)}${o.status === 'installments' ? `<br><b>Saldo: ${escapeHtml(fmtCOP(balance))}</b>` : ''}</td>
+          <td class="tiny">${escapeHtml(notes)}${o.status === 'installments' ? `<br><span class="orderBalance">Saldo: ${escapeHtml(fmtCOP(balance))}</span>` : '<br><span class="orderStatus">Pedido por confirmar</span>'}</td>
           <td class="num" style="white-space:nowrap;">
             <div class="row" style="gap:8px; justify-content:flex-end;">
               ${openBtn}
@@ -1601,7 +1601,7 @@ export function boot() {
     const items = Array.isArray(st.saleItems) ? st.saleItems : [];
 
     if (!items.length) {
-      el.saleItemsBody.innerHTML = `<tr><td colspan="5" class="muted">Sin items…</td></tr>`;
+      el.saleItemsBody.innerHTML = `<tr><td colspan="5" class="muted">Aún no hay productos. Búscalos arriba y pulsa “Agregar”.</td></tr>`;
       el.saleTotal.textContent = fmtCOP(0);
       restoreFocus_(snap);
       return;

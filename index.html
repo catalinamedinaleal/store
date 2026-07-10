@@ -431,7 +431,7 @@
         <div class="card__head">
           <div>
             <h2 class="h2">Ventas</h2>
-            <p class="muted tiny">Carrito simple, total en vivo, registro en Sheets.</p>
+            <p class="muted tiny">Carrito simple, total en vivo y seguimiento de pagos en Firebase.</p>
           </div>
           <div class="card__actions">
             <button class="btn btn--primary" id="btnNewSale" type="button">Nueva venta</button>
@@ -441,8 +441,8 @@
         <div class="card subcard" id="ordersPane" style="margin-top:14px;">
           <div class="card__head">
             <div>
-              <h3 class="h3">Pedidos pendientes</h3>
-              <p class="muted tiny">Ventas guardadas como <b>Pendiente</b>.</p>
+              <h3 class="h3">Pendientes y cuotas</h3>
+              <p class="muted tiny">Revisa pedidos abiertos, saldos y registra nuevos abonos.</p>
             </div>
             <div class="card__actions">
               <button class="btn btn--ghost" id="btnRefreshOrders" type="button">Actualizar</button>
@@ -471,7 +471,7 @@
         <div class="empty" id="salesEmpty">
           <div class="empty__icon">🧾</div>
           <div class="empty__title">Aún no hay una venta abierta</div>
-          <div class="empty__text muted">Crea una nueva venta para agregar productos y guardar.</div>
+          <div class="empty__text muted">Crea una nueva venta, busca un producto y pulsa “Agregar” para comenzar.</div>
         </div>
 
         <div id="salePane" hidden>
@@ -497,7 +497,7 @@
                     </tr>
                   </thead>
                   <tbody id="saleItemsBody">
-                    <tr><td colspan="5" class="muted">Sin items…</td></tr>
+                    <tr><td colspan="5" class="muted">Aún no hay productos. Búscalos arriba y pulsa “Agregar”.</td></tr>
                   </tbody>
                 </table>
               </div>
