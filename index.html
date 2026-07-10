@@ -18,13 +18,6 @@
 
   <!-- Performance hints -->
   <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
-  <link rel="preconnect" href="https://apis.google.com" crossorigin />
-  <link rel="preconnect" href="https://accounts.google.com" crossorigin />
-  <link rel="preconnect" href="https://script.google.com" crossorigin />
-  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin />
-  <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
-  <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
-  <link rel="preconnect" href="https://securetoken.googleapis.com" crossorigin />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="icon" type="image/png" href="./assets/logo.png" />
 
@@ -38,7 +31,6 @@
       'self'
       https://www.gstatic.com
       https://apis.google.com
-      https://script.google.com
       https://cdn.jsdelivr.net
       'unsafe-inline';
 
@@ -49,11 +41,11 @@
     connect-src
       'self'
       https://www.gstatic.com
-      https://script.google.com
-      https://script.googleusercontent.com
       https://www.googleapis.com
       https://identitytoolkit.googleapis.com
       https://securetoken.googleapis.com
+      https://firestore.googleapis.com
+      https://firestore.googleapis.com/google.firestore.v1.Firestore
       https://cdn.jsdelivr.net;
 
     frame-src
@@ -65,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-05-20.1";
+    window.__BUILD__ = "2026-07-10.2";
   </script>
 
   <!-- CSS -->
@@ -538,9 +530,16 @@
                 <span class="label">Estado</span>
                 <select class="input" id="saleStatus">
                   <option value="paid">Pagado</option>
+                  <option value="installments">A cuotas</option>
                   <option value="pending">Pendiente</option>
                   <option value="cancelled">Cancelado</option>
                 </select>
+              </label>
+
+              <label class="field" id="saleInitialPaymentField" hidden>
+                <span class="label">Abono inicial</span>
+                <input class="input" id="saleInitialPayment" type="number" min="0" step="1000" value="0" inputmode="numeric" />
+                <span class="tiny muted">El saldo quedará pendiente y podrás registrar nuevos abonos.</span>
               </label>
 
               <label class="field">

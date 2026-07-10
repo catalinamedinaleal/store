@@ -6,15 +6,18 @@ let sdk = null;
 let fbApp = null;
 let auth = null;
 let googleProvider = null;
+let db = null;
 
 export async function initFirebase() {
   if (auth && sdk) return FirebaseAuth;
 
   const appMod = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js');
   const authMod = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js');
+  const firestoreMod = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js');
 
   fbApp = appMod.initializeApp(FIREBASE_CONFIG);
   auth = authMod.getAuth(fbApp);
+  db = firestoreMod.getFirestore(fbApp);
   googleProvider = new authMod.GoogleAuthProvider();
   sdk = authMod;
 
@@ -25,6 +28,8 @@ export async function initFirebase() {
 export function getFirebaseAuth() {
   return auth;
 }
+
+export function getFirestoreDb() { return db; }
 
 export function loginGoogle() {
   if (!sdk || !auth) throw new Error('Firebase no inicializado');

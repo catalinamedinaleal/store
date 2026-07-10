@@ -18,32 +18,10 @@ Mantiene TODO:
 - Pricing helpers + auto ID productos
 ============================================================================= */
 
-import { StoreAPI, apiPost } from './api.js';
+import { StoreAPI } from './firebase-store.js';
 import { State } from './state.js';
 import { STORE_CFG, ALLOWED_EMAILS } from './config.js';
 import { FirebaseAuth, initFirebase } from './firebase.js';
-import * as AuthFeature from './features/auth.js';
-import * as CatalogFeature from './features/catalog.js';
-import * as InventoryFeature from './features/inventory.js';
-import * as SalesFeature from './features/sales.js';
-import * as OrdersFeature from './features/orders.js';
-import * as MovesFeature from './features/moves.js';
-import * as DashboardFeature from './features/dashboard.js';
-import * as RestockFeature from './features/restock.js';
-
-export const StoreFeatures = Object.freeze({
-  auth: AuthFeature,
-  catalog: CatalogFeature,
-  inventory: InventoryFeature,
-  sales: SalesFeature,
-  orders: OrdersFeature,
-  moves: MovesFeature,
-  dashboard: DashboardFeature,
-  restock: RestockFeature,
-});
-
-globalThis.StoreFeatures = StoreFeatures;
-
 /* =========================
    CFG helpers (compat layer)
 ========================= */
@@ -184,7 +162,6 @@ export function boot() {
     (globalThis.CFG && typeof globalThis.CFG === 'object' ? globalThis.CFG : null) ||
     {};
 
-  const API_BASE = String(CFG.API_BASE || '').trim();
 
   /* =========================
      DOM helpers
@@ -260,6 +237,8 @@ export function boot() {
     saleCustomer: $('saleCustomer'),
     salePay: $('salePay'),
     saleStatus: $('saleStatus'),
+    saleInitialPayment: $('saleInitialPayment'),
+    saleInitialPaymentField: $('saleInitialPaymentField'),
     saleNotes: $('saleNotes'),
     btnSaveSale: $('btnSaveSale'),
     btnCancelSale: $('btnCancelSale'),
@@ -338,7 +317,6 @@ export function boot() {
   /* =========================
      Sanity / Info
   ========================= */
-if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar la conexión. Intenta de nuevo más tarde.';
 
   /* =========================
      Utils
@@ -393,10 +371,17 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
     const x = String(s || '').toLowerCase().trim();
     if (!x) return 'pending';
     if (x === 'paid' || x === 'pending' || x === 'cancelled') return x;
+    if (x === 'installments') return 'installments';
     if (x === 'pagado') return 'paid';
     if (x === 'pendiente') return 'pending';
     if (x === 'cancelado') return 'cancelled';
     return x;
+  }
+
+  function syncInstallmentFields_() {
+    const isInstallment = el.saleStatus?.value === 'installments';
+    if (el.saleInitialPaymentField) el.saleInitialPaymentField.hidden = !isInstallment;
+    if (!isInstallment && el.saleInitialPayment) el.saleInitialPayment.value = '0';
   }
 
   function safeStr_(v, max = 4000) {
@@ -493,10 +478,12 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
   }
 
   async function apiPostAuthed_(payload) {
-    const token = getToken_();
-    const p = { ...(payload || {}) };
-    if (token && !p.token) p.token = token;
-    return apiPost(p);
+    const p = payload || {};
+    if (p.action === 'sales.list') return StoreAPI.listSales(p.status, p.include_items, p.limit);
+    if (p.action === 'sale.get') return StoreAPI.getSale(p.id);
+    if (p.action === 'sale.create') return StoreAPI.createSale({ sale: p.sale, items: p.items });
+    if (p.action === 'sale.updateStatus') return StoreAPI.updateSaleStatus(p.id, p.status);
+    throw new Error(`Acción Firebase no soportada: ${p.action || ''}`);
   }
 
   function setStoreApiToken_(token) {
@@ -709,8 +696,11 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
   ========================= */
   async function loadOrders_() {
     try {
-      const r = await apiPostAuthed_({ action: 'sales.list', status: 'pending', include_items: false, limit: 300 });
-      const items = Array.isArray(r.items) ? r.items : [];
+      const [pending, installments] = await Promise.all([
+        StoreAPI.listSales('pending', false, 300),
+        StoreAPI.listSales('installments', false, 300),
+      ]);
+      const items = [...(pending.items || []), ...(installments.items || [])];
 
       const orders = items.map(x => ({
         id: String(x.id || '').trim(),
@@ -720,6 +710,8 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
         total_cop: toInt(x.total_cop),
         notes: x.notes || '',
         status: normStatus_(x.status || 'pending'),
+        paid_cop: toInt(x.paid_cop),
+        balance_cop: toInt(x.balance_cop),
         posted: !!x.posted,
         source: 'api',
         items: null,
@@ -762,7 +754,10 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
 
       const oid = escapeHtml(String(o.id || ''));
       const openBtn = `<button class="btn btn--tiny btn--ghost" data-order-open="${oid}">Abrir</button>`;
-      const payBtn  = `<button class="btn btn--tiny btn--primary" data-order-pay="${oid}">Marcar pagado</button>`;
+      const balance = toInt(o.balance_cop);
+      const payBtn  = o.status === 'installments'
+        ? `<button class="btn btn--tiny btn--primary" data-order-payment="${oid}">Abonar ${escapeHtml(fmtCOP(balance))}</button>`
+        : `<button class="btn btn--tiny btn--primary" data-order-pay="${oid}">Marcar pagado</button>`;
       const delBtn  = (st.ordersSource === 'local')
         ? `<button class="btn btn--tiny btn--ghost" data-order-del="${oid}">Eliminar</button>`
         : '';
@@ -772,7 +767,7 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
           <td class="tiny muted">${escapeHtml(d || '')}</td>
           <td>${escapeHtml(cust)}</td>
           <td class="num mono">${escapeHtml(total)}</td>
-          <td class="tiny">${escapeHtml(notes)}</td>
+          <td class="tiny">${escapeHtml(notes)}${o.status === 'installments' ? `<br><b>Saldo: ${escapeHtml(fmtCOP(balance))}</b>` : ''}</td>
           <td class="num" style="white-space:nowrap;">
             <div class="row" style="gap:8px; justify-content:flex-end;">
               ${openBtn}
@@ -1375,6 +1370,7 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
     if (el.saleNotes) el.saleNotes.value = '';
     if (el.salePay) el.salePay.value = 'cash';
     if (el.saleStatus) el.saleStatus.value = 'paid';
+    syncInstallmentFields_();
 
     scheduleSaleRender_();
     syncSalesUI_();
@@ -1656,9 +1652,13 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
       payment_method: safeStr_(el.salePay?.value, 40),
       status: normStatus_(String(el.saleStatus?.value || 'paid').trim()),
       notes: safeStr_(el.saleNotes?.value, 1200),
+      initial_payment_cop: Math.max(0, toInt(el.saleInitialPayment?.value)),
     };
 
     const computedTotal = items.reduce((acc, it) => acc + (toInt(it.qty) * toInt(it.unit_price)), 0);
+    if (sale.status === 'installments' && sale.initial_payment_cop > computedTotal) {
+      toast('El abono inicial no puede superar el total.', false); return;
+    }
 
     setBusy_(true, sale.status === 'pending' ? 'Guardando pedido…' : 'Guardando venta…');
     try {
@@ -1751,6 +1751,18 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
     } finally {
       setBusy_(false);
     }
+  }
+
+  async function addInstallmentPayment_(id) {
+    const order = State.get().orders.find(x => String(x.id) === String(id));
+    const balance = toInt(order?.balance_cop);
+    const raw = prompt(`Saldo pendiente: ${fmtCOP(balance)}\nValor del abono:`, '');
+    if (raw === null) return;
+    const amount = toInt(String(raw).replace(/[^0-9]/g, ''));
+    setBusy_(true, 'Registrando abono…');
+    try { await StoreAPI.addPayment(id, amount, order?.payment_method || 'cash'); toast('Abono registrado ✅', true); await refreshAfterOrderPaid_(); }
+    catch (e) { toast(e?.message || String(e), false); }
+    finally { setBusy_(false); }
   }
 
   /* =========================
@@ -2340,6 +2352,7 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
     on(el.btnCancelSale, 'click', () => closeSale_());
     on(el.btnAddToSale, 'click', () => addToSale_());
     on(el.btnSaveSale, 'click', async () => { try { await saveSale_(); } catch {} });
+    on(el.saleStatus, 'change', syncInstallmentFields_);
     on(el.btnSaveProduct, 'click', async () => { try { await saveProduct_(); } catch {} });
     on(el.btnSaveStock, 'click', async () => { try { await saveStock_(); } catch {} });
     on(el.btnSaveInventoryMeta, 'click', async () => { try { await saveInventoryMeta_(); } catch {} });
@@ -2429,10 +2442,12 @@ if (!API_BASE && el.authStatus) el.authStatus.textContent = 'No se pudo preparar
 
       const openId = btn.dataset.orderOpen;
       const payId = btn.dataset.orderPay;
+      const paymentId = btn.dataset.orderPayment;
       const delId = btn.dataset.orderDel;
 
       if (openId !== undefined) { await openOrder_(openId); return; }
       if (payId !== undefined) { await markOrderPaid_(payId); return; }
+      if (paymentId !== undefined) { await addInstallmentPayment_(paymentId); return; }
       if (delId !== undefined) {
         removeLocalOrder_(delId);
         renderOrders_();

@@ -1,22 +1,14 @@
 'use strict';
 
-export const BUILD_VERSION = '2026-05-17.4';
+export const BUILD_VERSION = '2026-07-10.2';
 
-const API_BASE_RAW = 'https://script.google.com/macros/s/AKfycbzIBInWsnCEiCToJLQdnlHFhrzCpxWszBrTte_cN8pSYiSMxj4w0356AOCGc4r-k1VNgg/exec';
-
-export const API_BASE = String(API_BASE_RAW || '').trim().replace(/\/+$/, '');
 export const CURRENCY = 'COP';
 export const LOCALE = 'es-CO';
-export const API_TIMEOUT_MS = 25000;
-export const API_FORCE_POST = true;
-export const API_COALESCE = true;
-export const API_JSONP_FALLBACK = false;
 export const RESTOCK_PDF_HIDE_PRICES = true;
 
 export const ALLOWED_EMAILS = new Set([
   'alekcaballeromusic@gmail.com',
   'catalina.medina.leal@gmail.com',
-  'musicalaasesor@gmail.com',
 ]);
 
 export const FIREBASE_CONFIG = Object.freeze({
@@ -29,14 +21,9 @@ export const FIREBASE_CONFIG = Object.freeze({
 });
 
 export const STORE_CFG = Object.freeze({
-  API_BASE,
   CURRENCY,
   LOCALE,
   BUILD: BUILD_VERSION,
-  API_TIMEOUT_MS,
-  API_FORCE_POST,
-  API_COALESCE,
-  API_JSONP_FALLBACK,
   RESTOCK_PDF_HIDE_PRICES,
 });
 
