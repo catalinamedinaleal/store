@@ -9,6 +9,8 @@ export const RESTOCK_PDF_HIDE_PRICES = true;
 export const ALLOWED_EMAILS = new Set([
   'alekcaballeromusic@gmail.com',
   'catalina.medina.leal@gmail.com',
+  'adminmusicala@gmail.com',
+  'musicalaasesor@gmail.com',
 ]);
 
 export const FIREBASE_CONFIG = Object.freeze({
