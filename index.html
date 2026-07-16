@@ -57,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-07-10.2";
+    window.__BUILD__ = "2026-07-16.1";
   </script>
 
   <!-- CSS -->
@@ -445,6 +445,11 @@
               <p class="muted tiny">Revisa pedidos abiertos, saldos y registra nuevos abonos.</p>
             </div>
             <div class="card__actions">
+              <select class="input" id="ordersFilter" aria-label="Filtrar ventas" style="width:auto;">
+                <option value="open">Pendientes y cuotas</option>
+                <option value="paid">Pagadas</option>
+                <option value="all">Todas</option>
+              </select>
               <button class="btn btn--ghost" id="btnRefreshOrders" type="button">Actualizar</button>
             </div>
           </div>
@@ -926,6 +931,77 @@
       <div class="modal__foot">
         <button class="btn btn--primary" id="btnSaveInventoryMeta" type="button">Guardar</button>
         <button class="btn btn--ghost" type="button" data-close-dialog="modalInventoryMeta">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Detalle de venta -->
+  <dialog class="modal" id="modalSaleDetail" aria-label="Detalle de venta">
+    <form method="dialog" class="modal__card" id="saleDetailForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">Detalle de venta</h3>
+          <p class="muted tiny" id="sd_created">—</p>
+        </div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalSaleDetail">Cerrar</button>
+      </div>
+
+      <input id="sd_id" type="hidden" />
+
+      <div class="grid2" style="margin-top:12px;">
+        <label class="field">
+          <span class="label">Cliente</span>
+          <input class="input" id="sd_customer" type="text" placeholder="Nombre del cliente" />
+        </label>
+        <label class="field">
+          <span class="label">Método de pago</span>
+          <select class="input" id="sd_pay">
+            <option value="cash">Efectivo</option>
+            <option value="transfer">Transferencia</option>
+            <option value="card">Tarjeta</option>
+            <option value="mixed">Mixto</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="field" style="margin-top:12px;">
+        <span class="label">Notas</span>
+        <textarea class="input" id="sd_notes" rows="2" placeholder="Notas de la venta"></textarea>
+      </label>
+
+      <div class="tiny" id="sd_summary" style="margin-top:12px;"></div>
+
+      <div class="tablewrap" style="margin-top:12px;">
+        <table class="table table--compact" aria-label="Productos de la venta">
+          <thead>
+            <tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr>
+          </thead>
+          <tbody id="sd_itemsBody"><tr><td colspan="4" class="muted">—</td></tr></tbody>
+        </table>
+      </div>
+
+      <h4 class="h3" style="margin:14px 0 6px;">Abonos</h4>
+      <div class="tablewrap">
+        <table class="table table--compact" aria-label="Abonos de la venta">
+          <thead>
+            <tr><th>Fecha y hora</th><th class="num">Valor</th><th>Método</th><th>Nota</th><th class="num">Acciones</th></tr>
+          </thead>
+          <tbody id="sd_paymentsBody"><tr><td colspan="5" class="muted">—</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="row" id="sd_addPaymentRow" style="gap:8px; margin-top:10px; align-items:flex-end;">
+        <label class="field" style="flex:1;">
+          <span class="label">Nuevo abono</span>
+          <input class="input" id="sd_newPayment" type="number" min="0" step="1000" inputmode="numeric" placeholder="Valor en COP" />
+        </label>
+        <button class="btn btn--ghost" id="btnAddPaymentDetail" type="button">Registrar abono</button>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveSaleDetail" type="button">Guardar cambios</button>
+        <button class="btn btn--ghost" id="btnDeleteSale" type="button" style="color:#b42318;">Eliminar venta</button>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalSaleDetail">Cancelar</button>
       </div>
     </form>
   </dialog>

@@ -58,5 +58,81 @@ export const StoreAPI = {
   },
   async addPayment(saleId, amount, method = 'cash', note = '') { const f=await sdk_(),db=getFirestoreDb(),ref=f.doc(db,'sales',s(saleId)),value=Math.max(0,n(amount));if(!value)throw new Error('Ingresa un abono válido.');await f.runTransaction(db,async tx=>{const sale=(await tx.get(ref)).data();if(!sale)throw new Error('Venta no encontrada');const balance=Math.max(0,n(sale.balance_cop));if(value>balance)throw new Error('El abono supera el saldo pendiente.');const nextBalance=balance-value,nextStatus=nextBalance===0?'paid':'installments',payments=[...(sale.payments||[]),{amount_cop:value,date:new Date().toISOString(),method:s(method)||'cash',note:s(note)}];tx.update(ref,{paid_cop:n(sale.paid_cop)+value,balance_cop:nextBalance,status:nextStatus,payments,paid_at:nextStatus==='paid'?f.serverTimestamp():null,posted:nextStatus==='paid'});});return {ok:true}; },
   async updateSaleStatus(saleId, status) { const f=await sdk_(),db=getFirestoreDb(),ref=f.doc(db,'sales',s(saleId)),next=s(status); await f.runTransaction(db,async tx=>{const sale=(await tx.get(ref)).data(); if(!sale) throw new Error('Venta no encontrada'); if(next==='paid'&&sale.status!=='paid') for(const row of (sale.items||[])){const inv=f.doc(db,'inventory',s(row.product_id)),cur=(await tx.get(inv)).data()||{},stock=n(cur.stock)-n(row.qty);if(stock<0)throw new Error('Stock insuficiente para '+s(row.product_id));const moveId=id('mov');tx.set(inv,{...cur,product_id:s(row.product_id),stock,updated_at:f.serverTimestamp()},{merge:true});tx.set(f.doc(db,'inventoryMoves',moveId),{move_id:moveId,product_id:s(row.product_id),type:'sale',qty:-n(row.qty),ref:s(saleId),note:'Venta '+s(saleId),date:f.serverTimestamp()});}tx.update(ref,{status:next,paid_at:next==='paid'?f.serverTimestamp():null,posted:next==='paid'});}); return {ok:true}; },
+  async updateSale(saleId, patch = {}) {
+    const f = await sdk_(); const ref = f.doc(getFirestoreDb(), 'sales', s(saleId));
+    const data = {};
+    if ('customer_id' in patch) data.customer_id = s(patch.customer_id);
+    if ('payment_method' in patch) data.payment_method = s(patch.payment_method);
+    if ('notes' in patch) data.notes = s(patch.notes);
+    if (!Object.keys(data).length) return { ok: true };
+    data.updated_at = f.serverTimestamp();
+    await f.updateDoc(ref, data);
+    return { ok: true };
+  },
+  async deleteSale(saleId) {
+    const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
+    await f.runTransaction(db, async tx => {
+      const sale = (await tx.get(ref)).data();
+      if (!sale) throw new Error('Venta no encontrada');
+      const discounted = sale.status === 'paid' || sale.status === 'installments';
+      if (discounted) {
+        // Devolver el stock que la venta había descontado
+        const rows = (sale.items || []).filter(r => s(r.product_id) && n(r.qty) > 0);
+        const reads = [];
+        for (const row of rows) {
+          const inv = f.doc(db, 'inventory', s(row.product_id));
+          reads.push([row, inv, (await tx.get(inv)).data() || {}]);
+        }
+        for (const [row, inv, cur] of reads) {
+          const stock = n(cur.stock) + n(row.qty);
+          const moveId = id('mov');
+          tx.set(inv, { ...cur, product_id: s(row.product_id), stock, updated_at: f.serverTimestamp() }, { merge: true });
+          tx.set(f.doc(db, 'inventoryMoves', moveId), { move_id: moveId, product_id: s(row.product_id), type: 'sale_delete', qty: n(row.qty), ref: s(saleId), note: 'Eliminación venta ' + s(saleId), date: f.serverTimestamp() });
+        }
+      }
+      tx.delete(ref);
+    });
+    return { ok: true };
+  },
+  async updatePayment(saleId, index, { amount, method, note } = {}) {
+    const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
+    await f.runTransaction(db, async tx => {
+      const sale = (await tx.get(ref)).data();
+      if (!sale) throw new Error('Venta no encontrada');
+      const payments = [...(sale.payments || [])];
+      const i = n(index);
+      if (i < 0 || i >= payments.length) throw new Error('Abono no encontrado');
+      const next = { ...payments[i] };
+      if (amount !== undefined) next.amount_cop = Math.max(0, n(amount));
+      if (method !== undefined) next.method = s(method) || 'cash';
+      if (note !== undefined) next.note = s(note);
+      next.edited_at = new Date().toISOString();
+      payments[i] = next;
+      const total = n(sale.total_cop);
+      const paid = payments.reduce((a, p) => a + n(p.amount_cop), 0);
+      if (paid > total) throw new Error('Los abonos superan el total de la venta.');
+      const balance = total - paid;
+      const status = balance === 0 ? 'paid' : 'installments';
+      tx.update(ref, { payments, paid_cop: paid, balance_cop: balance, status, posted: status === 'paid', paid_at: status === 'paid' ? f.serverTimestamp() : null });
+    });
+    return { ok: true };
+  },
+  async deletePayment(saleId, index) {
+    const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
+    await f.runTransaction(db, async tx => {
+      const sale = (await tx.get(ref)).data();
+      if (!sale) throw new Error('Venta no encontrada');
+      const payments = [...(sale.payments || [])];
+      const i = n(index);
+      if (i < 0 || i >= payments.length) throw new Error('Abono no encontrado');
+      payments.splice(i, 1);
+      const total = n(sale.total_cop);
+      const paid = payments.reduce((a, p) => a + n(p.amount_cop), 0);
+      const balance = total - paid;
+      const status = balance === 0 && total > 0 ? 'paid' : 'installments';
+      tx.update(ref, { payments, paid_cop: paid, balance_cop: balance, status, posted: status === 'paid', paid_at: status === 'paid' ? f.serverTimestamp() : null });
+    });
+    return { ok: true };
+  },
   async dashboard() { const [products,inventory,sales]=await Promise.all([all_('products'),all_('inventory'),all_('sales','created_at')]); const paid=sales.filter(x=>x.status==='paid'); const today=new Date().toISOString().slice(0,10); return {ok:true,products_count:products.length,low_stock:inventory.filter(x=>n(x.stock)<=n(x.min_stock)),today_total_cop:paid.filter(x=>iso(x.created_at).slice(0,10)===today).reduce((a,x)=>a+n(x.total_cop),0),total_cop:paid.reduce((a,x)=>a+n(x.total_cop),0),sales_count:paid.length}; },
 };

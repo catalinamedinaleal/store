@@ -248,6 +248,23 @@ export function boot() {
     ordersBody: $('ordersBody'),
     ordersMeta: $('ordersMeta'),
     ordersPane: $('ordersPane'),
+    ordersFilter: $('ordersFilter'),
+
+    // sale detail modal
+    modalSaleDetail: $('modalSaleDetail'),
+    sd_id: $('sd_id'),
+    sd_created: $('sd_created'),
+    sd_customer: $('sd_customer'),
+    sd_pay: $('sd_pay'),
+    sd_notes: $('sd_notes'),
+    sd_summary: $('sd_summary'),
+    sd_itemsBody: $('sd_itemsBody'),
+    sd_paymentsBody: $('sd_paymentsBody'),
+    sd_addPaymentRow: $('sd_addPaymentRow'),
+    sd_newPayment: $('sd_newPayment'),
+    btnAddPaymentDetail: $('btnAddPaymentDetail'),
+    btnSaveSaleDetail: $('btnSaveSaleDetail'),
+    btnDeleteSale: $('btnDeleteSale'),
 
     // moves
     qMoves: $('qMoves'),
@@ -400,6 +417,26 @@ export function boot() {
       p?.precioCompetencia ??
       p?.precioCompetenciaCOP
     );
+  }
+
+  /* Fecha y hora claras, en hora local (es-CO) */
+  function fmtDatePart_(v) {
+    const d = new Date(v);
+    if (!v || isNaN(d)) return String(v || '—');
+    try {
+      return new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(d);
+    } catch { return d.toLocaleDateString(); }
+  }
+  function fmtTimePart_(v) {
+    const d = new Date(v);
+    if (!v || isNaN(d)) return '';
+    try {
+      return new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
+    } catch { return d.toLocaleTimeString(); }
+  }
+  function fmtDateTime_(v) {
+    const t = fmtTimePart_(v);
+    return t ? `${fmtDatePart_(v)}, ${t}` : fmtDatePart_(v);
   }
 
   function nowLocalStamp_() {
@@ -696,11 +733,8 @@ export function boot() {
   ========================= */
   async function loadOrders_() {
     try {
-      const [pending, installments] = await Promise.all([
-        StoreAPI.listSales('pending', false, 300),
-        StoreAPI.listSales('installments', false, 300),
-      ]);
-      const items = [...(pending.items || []), ...(installments.items || [])];
+      const res = await StoreAPI.listSales('all', false, 500);
+      const items = (res.items || []).filter(x => normStatus_(x.status) !== 'cancelled');
 
       const orders = items.map(x => ({
         id: String(x.id || '').trim(),
@@ -727,14 +761,26 @@ export function boot() {
     }
   }
 
+  function ordersFilterValue_() {
+    const v = String(el.ordersFilter?.value || 'open');
+    return ['open', 'paid', 'all'].includes(v) ? v : 'open';
+  }
+
   function renderOrders_() {
     if (!el.ordersBody) return;
 
     const st = State.get();
-    const rows = Array.isArray(st.orders) ? st.orders : [];
+    const all = Array.isArray(st.orders) ? st.orders : [];
+    const filter = ordersFilterValue_();
+    const rows = all.filter(o => {
+      const s = normStatus_(o.status);
+      if (filter === 'open') return s === 'pending' || s === 'installments';
+      if (filter === 'paid') return s === 'paid';
+      return true;
+    });
 
     if (!rows.length) {
-      el.ordersBody.innerHTML = `<tr><td colspan="5" class="muted">No hay pedidos pendientes.</td></tr>`;
+      el.ordersBody.innerHTML = `<tr><td colspan="5" class="muted">No hay ventas en este filtro.</td></tr>`;
       if (el.ordersMeta) {
         el.ordersMeta.textContent = (st.ordersSource === 'api')
           ? 'Fuente: servidor'
@@ -747,31 +793,48 @@ export function boot() {
     const sorted = rows.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 
     el.ordersBody.innerHTML = sorted.map(o => {
-      const d = String(o.created_at || '');
       const cust = String(o.customer_id || '').trim() || '—';
       const total = fmtCOP(toInt(o.total_cop));
       const notes = String(o.notes || '').trim();
+      const status = normStatus_(o.status);
+      const isApi = st.ordersSource === 'api';
 
       const oid = escapeHtml(String(o.id || ''));
-      const openBtn = `<button class="btn btn--tiny btn--ghost" data-order-open="${oid}">Abrir</button>`;
       const balance = toInt(o.balance_cop);
-      const payBtn  = o.status === 'installments'
-        ? `<button class="btn btn--tiny btn--primary" data-order-payment="${oid}">Abonar ${escapeHtml(fmtCOP(balance))}</button>`
-        : `<button class="btn btn--tiny btn--primary" data-order-pay="${oid}">Marcar pagado</button>`;
-      const delBtn  = (st.ordersSource === 'local')
-        ? `<button class="btn btn--tiny btn--ghost" data-order-del="${oid}">Eliminar</button>`
-        : '';
+
+      const openBtn = (status !== 'paid')
+        ? `<button class="btn btn--tiny btn--ghost" data-order-open="${oid}">Abrir</button>` : '';
+      const payBtn = status === 'installments'
+        ? `<button class="btn btn--tiny btn--primary" data-order-payment="${oid}">Abonar</button>`
+        : (status === 'pending'
+          ? `<button class="btn btn--tiny btn--primary" data-order-pay="${oid}">Marcar pagado</button>`
+          : '');
+      const detailBtn = isApi
+        ? `<button class="btn btn--tiny btn--ghost" data-order-detail="${oid}">✏️ Editar</button>` : '';
+      const delBtn = isApi
+        ? `<button class="btn btn--tiny btn--ghost" data-order-delete="${oid}" title="Eliminar venta" style="color:#b42318;">Eliminar</button>`
+        : `<button class="btn btn--tiny btn--ghost" data-order-del="${oid}">Eliminar</button>`;
+
+      const statusLine = status === 'installments'
+        ? `<span class="orderBalance">Saldo: ${escapeHtml(fmtCOP(balance))}</span>`
+        : (status === 'paid'
+          ? `<span class="orderStatus">Pagada ✅</span>`
+          : `<span class="orderStatus">Pedido por confirmar</span>`);
 
       return `
         <tr>
-          <td class="tiny muted">${escapeHtml(d || '')}</td>
+          <td class="tiny">
+            <div>${escapeHtml(fmtDatePart_(o.created_at))}</div>
+            <div class="muted mono">${escapeHtml(fmtTimePart_(o.created_at))}</div>
+          </td>
           <td>${escapeHtml(cust)}</td>
           <td class="num mono">${escapeHtml(total)}</td>
-          <td class="tiny">${escapeHtml(notes)}${o.status === 'installments' ? `<br><span class="orderBalance">Saldo: ${escapeHtml(fmtCOP(balance))}</span>` : '<br><span class="orderStatus">Pedido por confirmar</span>'}</td>
+          <td class="tiny">${escapeHtml(notes)}${notes ? '<br>' : ''}${statusLine}</td>
           <td class="num" style="white-space:nowrap;">
             <div class="row" style="gap:8px; justify-content:flex-end;">
               ${openBtn}
               ${payBtn}
+              ${detailBtn}
               ${delBtn}
             </div>
           </td>
@@ -781,7 +844,7 @@ export function boot() {
 
     if (el.ordersMeta) {
       el.ordersMeta.textContent = (st.ordersSource === 'api')
-        ? `Fuente: servidor · ${rows.length} pedido(s)`
+        ? `Fuente: servidor · ${rows.length} venta(s) en este filtro`
         : `Fuente: local (este dispositivo) · ${rows.length} pedido(s)`;
     }
 
@@ -1766,6 +1829,233 @@ export function boot() {
   }
 
   /* =========================
+     Detalle de venta (editar / eliminar / abonos)
+  ========================= */
+  const SALE_DETAIL = { id: '', sale: null };
+
+  function statusLabel_(s) {
+    const x = normStatus_(s);
+    if (x === 'paid') return 'Pagada ✅';
+    if (x === 'installments') return 'A cuotas';
+    if (x === 'pending') return 'Pendiente';
+    if (x === 'cancelled') return 'Cancelada';
+    return x || '—';
+  }
+
+  function payLabel_(m) {
+    const x = String(m || '').toLowerCase();
+    if (x === 'cash') return 'Efectivo';
+    if (x === 'transfer') return 'Transferencia';
+    if (x === 'card') return 'Tarjeta';
+    if (x === 'mixed') return 'Mixto';
+    return m || '—';
+  }
+
+  function renderSaleDetail_() {
+    const sale = SALE_DETAIL.sale;
+    if (!sale) return;
+
+    if (el.sd_id) el.sd_id.value = String(sale.id || '');
+    if (el.sd_created) el.sd_created.textContent = `Registrada: ${fmtDateTime_(sale.created_at)} · ID: ${String(sale.id || '')}`;
+    if (el.sd_customer) el.sd_customer.value = String(sale.customer_id || '');
+    if (el.sd_pay) el.sd_pay.value = String(sale.payment_method || 'cash') || 'cash';
+    if (el.sd_notes) el.sd_notes.value = String(sale.notes || '');
+
+    const total = toInt(sale.total_cop);
+    const paid = toInt(sale.paid_cop);
+    const balance = toInt(sale.balance_cop);
+
+    if (el.sd_summary) {
+      el.sd_summary.innerHTML = `
+        <b>Estado:</b> ${escapeHtml(statusLabel_(sale.status))}
+        &nbsp;·&nbsp; <b>Total:</b> <span class="mono">${escapeHtml(fmtCOP(total))}</span>
+        &nbsp;·&nbsp; <b>Pagado:</b> <span class="mono">${escapeHtml(fmtCOP(paid))}</span>
+        &nbsp;·&nbsp; <b>Saldo:</b> <span class="mono">${escapeHtml(fmtCOP(balance))}</span>
+      `;
+    }
+
+    if (el.sd_itemsBody) {
+      const idx = State.productsIndex();
+      const items = Array.isArray(sale.items) ? sale.items : [];
+      el.sd_itemsBody.innerHTML = items.length ? items.map(it => {
+        const pid = String(it.product_id || '').trim();
+        const name = idx.get(pid)?.name || pid || '—';
+        const qty = toInt(it.qty);
+        const unit = toInt(it.unit_price);
+        return `
+          <tr>
+            <td>${escapeHtml(name)}</td>
+            <td class="num mono">${qty}</td>
+            <td class="num mono">${escapeHtml(fmtCOP(unit))}</td>
+            <td class="num mono">${escapeHtml(fmtCOP(qty * unit))}</td>
+          </tr>
+        `;
+      }).join('') : `<tr><td colspan="4" class="muted">Sin detalle de productos.</td></tr>`;
+    }
+
+    if (el.sd_paymentsBody) {
+      const payments = Array.isArray(sale.payments) ? sale.payments : [];
+      el.sd_paymentsBody.innerHTML = payments.length ? payments.map((p, i) => `
+        <tr>
+          <td class="tiny">
+            <div>${escapeHtml(fmtDatePart_(p.date))}</div>
+            <div class="muted mono">${escapeHtml(fmtTimePart_(p.date))}</div>
+          </td>
+          <td class="num mono">${escapeHtml(fmtCOP(toInt(p.amount_cop)))}</td>
+          <td class="tiny">${escapeHtml(payLabel_(p.method))}</td>
+          <td class="tiny">${escapeHtml(String(p.note || ''))}${p.edited_at ? ` <span class="muted">(editado)</span>` : ''}</td>
+          <td class="num" style="white-space:nowrap;">
+            <button class="btn btn--tiny btn--ghost" data-pay-edit="${i}" type="button">Editar</button>
+            <button class="btn btn--tiny btn--ghost" data-pay-del="${i}" type="button" style="color:#b42318;">Eliminar</button>
+          </td>
+        </tr>
+      `).join('') : `<tr><td colspan="5" class="muted">Aún no hay abonos registrados.</td></tr>`;
+    }
+
+    if (el.sd_addPaymentRow) el.sd_addPaymentRow.hidden = (balance <= 0);
+    if (el.sd_newPayment) el.sd_newPayment.value = '';
+  }
+
+  async function openSaleDetail_(id) {
+    const key = String(id || '').trim();
+    if (!key) return;
+
+    await ensureProductsLoaded_().catch(() => {});
+
+    setBusy_(true, 'Cargando venta…');
+    try {
+      const res = await StoreAPI.getSale(key);
+      SALE_DETAIL.id = key;
+      SALE_DETAIL.sale = { ...(res.sale || {}), items: res.items || [] };
+      renderSaleDetail_();
+      el.modalSaleDetail?.showModal?.();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function reloadSaleDetail_() {
+    const key = SALE_DETAIL.id;
+    if (!key) return;
+    try {
+      const res = await StoreAPI.getSale(key);
+      SALE_DETAIL.sale = { ...(res.sale || {}), items: res.items || [] };
+      renderSaleDetail_();
+    } catch {
+      el.modalSaleDetail?.close?.();
+    }
+  }
+
+  async function saveSaleDetail_() {
+    const key = SALE_DETAIL.id;
+    if (!key) return;
+
+    setBusy_(true, 'Guardando cambios…');
+    try {
+      await StoreAPI.updateSale(key, {
+        customer_id: safeStr_(el.sd_customer?.value, 180),
+        payment_method: safeStr_(el.sd_pay?.value, 40),
+        notes: safeStr_(el.sd_notes?.value, 1200),
+      });
+      toast('Venta actualizada ✅', true);
+      await reloadSaleDetail_();
+      await refreshAfterOrderPaid_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function deleteSaleDetail_(id) {
+    const key = String(id || SALE_DETAIL.id || '').trim();
+    if (!key) return;
+
+    const ok = confirm('¿Eliminar esta venta definitivamente?\nSi ya descontó inventario, el stock se devolverá automáticamente.');
+    if (!ok) return;
+
+    setBusy_(true, 'Eliminando venta…');
+    try {
+      await StoreAPI.deleteSale(key);
+      toast('Venta eliminada 🗑️ (stock devuelto si aplicaba)', true);
+      if (el.modalSaleDetail?.open) el.modalSaleDetail.close();
+      SALE_DETAIL.id = ''; SALE_DETAIL.sale = null;
+      await refreshAfterOrderPaid_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function editPaymentDetail_(index) {
+    const sale = SALE_DETAIL.sale;
+    const payments = Array.isArray(sale?.payments) ? sale.payments : [];
+    const p = payments[index];
+    if (!p) return;
+
+    const raw = prompt(`Nuevo valor del abono (actual: ${fmtCOP(toInt(p.amount_cop))}):`, String(toInt(p.amount_cop)));
+    if (raw === null) return;
+    const amount = toInt(String(raw).replace(/[^0-9]/g, ''));
+    if (amount <= 0) { toast('Valor inválido', false); return; }
+
+    setBusy_(true, 'Actualizando abono…');
+    try {
+      await StoreAPI.updatePayment(SALE_DETAIL.id, index, { amount });
+      toast('Abono actualizado ✅', true);
+      await reloadSaleDetail_();
+      await refreshAfterOrderPaid_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function deletePaymentDetail_(index) {
+    const sale = SALE_DETAIL.sale;
+    const payments = Array.isArray(sale?.payments) ? sale.payments : [];
+    const p = payments[index];
+    if (!p) return;
+
+    const ok = confirm(`¿Eliminar el abono de ${fmtCOP(toInt(p.amount_cop))} del ${fmtDateTime_(p.date)}?`);
+    if (!ok) return;
+
+    setBusy_(true, 'Eliminando abono…');
+    try {
+      await StoreAPI.deletePayment(SALE_DETAIL.id, index);
+      toast('Abono eliminado 🗑️', true);
+      await reloadSaleDetail_();
+      await refreshAfterOrderPaid_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function addPaymentFromDetail_() {
+    const key = SALE_DETAIL.id;
+    if (!key) return;
+    const amount = toInt(el.sd_newPayment?.value);
+    if (amount <= 0) { toast('Ingresa un valor de abono válido', false); return; }
+
+    setBusy_(true, 'Registrando abono…');
+    try {
+      await StoreAPI.addPayment(key, amount, SALE_DETAIL.sale?.payment_method || 'cash');
+      toast('Abono registrado ✅', true);
+      await reloadSaleDetail_();
+      await refreshAfterOrderPaid_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  /* =========================
      Pricing helpers
   ========================= */
   const PRICING = { lock: false };
@@ -2444,16 +2734,42 @@ export function boot() {
       const payId = btn.dataset.orderPay;
       const paymentId = btn.dataset.orderPayment;
       const delId = btn.dataset.orderDel;
+      const detailId = btn.dataset.orderDetail;
+      const deleteId = btn.dataset.orderDelete;
 
       if (openId !== undefined) { await openOrder_(openId); return; }
       if (payId !== undefined) { await markOrderPaid_(payId); return; }
       if (paymentId !== undefined) { await addInstallmentPayment_(paymentId); return; }
+      if (detailId !== undefined) { await openSaleDetail_(detailId); return; }
+      if (deleteId !== undefined) { await deleteSaleDetail_(deleteId); return; }
       if (delId !== undefined) {
         removeLocalOrder_(delId);
         renderOrders_();
         toast('Pedido eliminado 🗑️', true);
         return;
       }
+    });
+
+    on(el.ordersFilter, 'change', () => renderOrders_());
+
+    // Detalle de venta
+    on(el.btnSaveSaleDetail, 'click', async () => { try { await saveSaleDetail_(); } catch {} });
+    on(el.btnDeleteSale, 'click', async () => { try { await deleteSaleDetail_(); } catch {} });
+    on(el.btnAddPaymentDetail, 'click', async () => { try { await addPaymentFromDetail_(); } catch {} });
+
+    on(el.sd_paymentsBody, 'click', async (ev) => {
+      const btn = ev.target?.closest?.('button');
+      if (!btn) return;
+      if (btn.dataset.payEdit !== undefined) { await editPaymentDetail_(toInt(btn.dataset.payEdit)); return; }
+      if (btn.dataset.payDel !== undefined) { await deletePaymentDetail_(toInt(btn.dataset.payDel)); return; }
+    });
+
+    // Cerrar diálogos con data-close-dialog (delegado global)
+    document.addEventListener('click', (ev) => {
+      const b = ev.target?.closest?.('[data-close-dialog]');
+      if (!b) return;
+      const dlg = document.getElementById(String(b.dataset.closeDialog || ''));
+      if (dlg && typeof dlg.close === 'function' && dlg.open) dlg.close();
     });
 
     on(el.saleSearch, 'keydown', (ev) => {
