@@ -999,7 +999,12 @@ export function boot() {
     const st = State.get();
     const has = Array.isArray(st.products) && st.products.length > 0;
 
-    if (!force && has) return;
+    if (!force && has) {
+      // Productos desde caché: los datalists de búsqueda pueden estar vacíos aún
+      if (el.saleProductsList && !el.saleProductsList.children.length) buildSaleDatalist_();
+      if (el.inventoryProductsList && !el.inventoryProductsList.children.length) buildInventoryProductDatalist_();
+      return;
+    }
     if (LOAD.productsInflight) return LOAD.productsInflight;
 
     LOAD.productsInflight = (async () => {
