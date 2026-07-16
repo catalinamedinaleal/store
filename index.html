@@ -57,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-07-16.2";
+    window.__BUILD__ = "2026-07-16.3";
   </script>
 
   <!-- CSS -->
@@ -1006,7 +1006,15 @@
     </form>
   </dialog>
 
-  <script type="module" src="./js/main.js"></script>
+  <!-- Cache-bust del JS igual que styles.css: siempre carga la versión del build -->
+  <script>
+    (function () {
+      var s = document.createElement('script');
+      s.type = 'module';
+      s.src = './js/main.js?v=' + encodeURIComponent(window.__BUILD__ || '');
+      document.body.appendChild(s);
+    })();
+  </script>
 </body>
 </html>
 
