@@ -21,10 +21,144 @@ async function all_(collection, orderByField = '') {
   return (await f.getDocs(q)).docs.map(item);
 }
 
+/* =============================================================================
+   Costos: viven APARTE de products.
+   -----------------------------------------------------------------------------
+   products/{id}      -> datos visibles para todo el equipo (incl. precio de venta)
+   productCosts/{id}  -> costo del proveedor, competencia y margen.
+                         firestore.rules: solo ADMIN puede leerlo.
+                         Las asesoras pueden escribirlo (registrar lo que les
+                         cotiza el proveedor) pero no leer el histórico.
+============================================================================= */
+const COST_FIELDS_LEGACY = [
+  'cost_cop', 'cost', 'costo_cop', 'costo',
+  'margin_pct',
+  'competitor_price_cop', 'competitor_price',
+  'precio_competencia', 'precio_competencia_cop',
+  'precioCompetencia', 'precioCompetenciaCOP',
+];
+
 export const StoreAPI = {
   async ping() { return { ok: true }; },
   async listProducts() { return { ok: true, items: await all_('products') }; },
   async listInventory() { return { ok: true, items: await all_('inventory') }; },
+
+  /* Solo admin: firestore.rules rechaza esta lectura para asesoras. */
+  async listProductCosts() { return { ok: true, items: await all_('productCosts') }; },
+
+  async getProductCost(productId) {
+    const f = await sdk_();
+    const snap = await f.getDoc(f.doc(getFirestoreDb(), 'productCosts', s(productId)));
+    return { ok: true, cost: snap.exists() ? item(snap) : null };
+  },
+
+  /* -------- Regla de precios (settings/pricing) -------- */
+  async getPricingSettings() {
+    const f = await sdk_();
+    const snap = await f.getDoc(f.doc(getFirestoreDb(), 'settings', 'pricing'));
+    return { ok: true, settings: snap.exists() ? snap.data() : null };
+  },
+
+  async savePricingSettings(settings = {}, updatedBy = '') {
+    const f = await sdk_();
+    const tiers = (Array.isArray(settings.tiers) ? settings.tiers : []).map(t => ({
+      max: Math.max(0, n(t?.max)),
+      margin_pct: Math.max(0, Number(t?.margin_pct) || 0),
+    }));
+    const data = {
+      version: Math.max(1, n(settings.version) || 1),
+      tiers,
+      round_to: Math.max(0, n(settings.round_to)),
+      round_mode: ['up', 'nearest', 'none'].includes(s(settings.round_mode)) ? s(settings.round_mode) : 'up',
+      updated_at: f.serverTimestamp(),
+      updated_by: s(updatedBy),
+    };
+    await f.setDoc(f.doc(getFirestoreDb(), 'settings', 'pricing'), data, { merge: true });
+    return { ok: true, settings: data };
+  },
+
+  /* -------- Migración: sacar costos viejos de products -------- */
+  async migrateCostsOutOfProducts(updatedBy = '') {
+    const f = await sdk_(); const db = getFirestoreDb();
+    const products = await all_('products');
+
+    let moved = 0, cleaned = 0;
+    let batch = f.writeBatch(db); let ops = 0;
+
+    const flush = async () => { if (ops) { await batch.commit(); batch = f.writeBatch(db); ops = 0; } };
+
+    for (const p of products) {
+      const pid = s(p.id);
+      if (!pid) continue;
+
+      const cost = n(p.cost_cop ?? p.cost ?? p.costo_cop ?? p.costo);
+      const comp = n(p.competitor_price_cop ?? p.competitor_price ?? p.precio_competencia ?? p.precio_competencia_cop);
+      const hasLegacy = COST_FIELDS_LEGACY.some(k => p[k] !== undefined);
+      if (!hasLegacy) continue;
+
+      if (cost > 0 || comp > 0) {
+        batch.set(f.doc(db, 'productCosts', pid), {
+          product_id: pid,
+          cost_cop: cost,
+          competitor_price_cop: comp,
+          margin_pct: Number(p.margin_pct) || 0,
+          price_cop: n(p.price_cop ?? p.price ?? p.precio_cop ?? p.precio),
+          updated_at: f.serverTimestamp(),
+          updated_by: s(updatedBy),
+          migrated: true,
+        }, { merge: true });
+        ops++; moved++;
+      }
+
+      const strip = {};
+      for (const k of COST_FIELDS_LEGACY) if (p[k] !== undefined) strip[k] = f.deleteField();
+      strip.has_cost = cost > 0;
+      strip.updated_at = f.serverTimestamp();
+
+      batch.set(f.doc(db, 'products', pid), strip, { merge: true });
+      ops++; cleaned++;
+
+      if (ops >= 400) await flush();
+    }
+
+    await flush();
+    return { ok: true, moved, cleaned, total: products.length };
+  },
+
+  /* -------- Utilidades (solo admin: necesita leer productCosts) -------- */
+  async profitReport() {
+    const [sales, costs] = await Promise.all([all_('sales', 'created_at'), all_('productCosts')]);
+    const costOf = new Map(costs.map(c => [s(c.product_id || c.id), n(c.cost_cop)]));
+    const today = new Date().toISOString().slice(0, 10);
+
+    let revenue = 0, cogs = 0, revenueToday = 0, cogsToday = 0, unknownCost = 0;
+
+    for (const sale of sales) {
+      if (sale.status !== 'paid') continue;
+      const isToday = iso(sale.created_at).slice(0, 10) === today;
+
+      for (const row of (sale.items || [])) {
+        const qty = n(row.qty);
+        const line = n(row.unit_price) * qty;
+        const pid = s(row.product_id);
+        const unitCost = costOf.has(pid) ? costOf.get(pid) : null;
+        if (unitCost === null) unknownCost += qty;
+        const lineCost = (unitCost || 0) * qty;
+
+        revenue += line; cogs += lineCost;
+        if (isToday) { revenueToday += line; cogsToday += lineCost; }
+      }
+    }
+
+    return {
+      ok: true,
+      revenue_cop: revenue,
+      profit_cop: revenue - cogs,
+      revenue_today_cop: revenueToday,
+      profit_today_cop: revenueToday - cogsToday,
+      units_without_cost: unknownCost,
+    };
+  },
   async listMoves(q = '', limit = 200) {
     const products = new Map((await all_('products')).map(p => [p.id, p.name || '']));
     const term = s(q).toLowerCase();
@@ -33,14 +167,83 @@ export const StoreAPI = {
     if (term) items = items.filter(x => [x.move_id,x.product_id,x.product_name,x.type,x.ref,x.note].join(' ').toLowerCase().includes(term));
     return { ok: true, items: items.slice(0, limit) };
   },
-  async upsertProduct(product = {}) {
+  /**
+   * upsertProduct
+   * - products/{id}      : SIN datos de costo (whitelist explícita).
+   * - productCosts/{id}  : costo/competencia/margen, solo si vienen en el guardado.
+   *
+   * opts:
+   *   writeCost         -> escribir el costo (false = no tocar el costo guardado)
+   *   includeCompetitor -> incluir precio de competencia (solo admin lo edita)
+   *   updatedBy         -> correo de quien guarda (auditoría)
+   */
+  async upsertProduct(product = {}, opts = {}) {
     const f = await sdk_(); const db = getFirestoreDb();
     const productId = s(product.id || product.product_id) || id('prod');
-    const ref = f.doc(db, 'products', productId); const previous = await f.getDoc(ref);
-    const data = { ...product, id: productId, name: s(product.name), brand: s(product.brand), category: s(product.category), desc: s(product.desc), sku: s(product.sku), image_url: s(product.image_url), price_cop: n(product.price_cop), cost_cop: n(product.cost_cop), competitor_price_cop: n(product.competitor_price_cop), competitor_url: s(product.competitor_url), active: product.active !== false, updated_at: f.serverTimestamp() };
+    const ref = f.doc(db, 'products', productId);
+    const previous = await f.getDoc(ref);
+    const prevData = previous.exists() ? (previous.data() || {}) : {};
+
+    const cost = Math.max(0, n(product.cost_cop));
+    const writeCost = opts.writeCost !== false && cost > 0;
+    const hadCost = !!prevData.has_cost;
+
+    // products: campos públicos únicamente
+    const data = {
+      id: productId,
+      name: s(product.name),
+      brand: s(product.brand),
+      category: s(product.category),
+      desc: s(product.desc),
+      sku: s(product.sku),
+      image_url: s(product.image_url),
+      price_cop: n(product.price_cop),
+      active: product.active !== false,
+      has_cost: writeCost ? true : hadCost,
+      updated_at: f.serverTimestamp(),
+      updated_by: s(opts.updatedBy),
+    };
+
+    // Limpieza: si el documento venía con costos incrustados (modelo viejo), los saca.
+    for (const k of COST_FIELDS_LEGACY) {
+      if (prevData[k] !== undefined) data[k] = f.deleteField();
+    }
+
     await f.setDoc(ref, data, { merge: true });
+
+    if (writeCost) {
+      const costDoc = {
+        product_id: productId,
+        cost_cop: cost,
+        margin_pct: Number(product.margin_pct) || 0,
+        price_cop: n(product.price_cop),
+        updated_at: f.serverTimestamp(),
+        updated_by: s(opts.updatedBy),
+      };
+      if (opts.includeCompetitor) costDoc.competitor_price_cop = Math.max(0, n(product.competitor_price_cop));
+      await f.setDoc(f.doc(db, 'productCosts', productId), costDoc, { merge: true });
+    } else if (!hadCost) {
+      // Producto del modelo viejo que aún guarda el costo adentro: lo rescatamos
+      // antes de borrarlo de products/. Solo ocurre si nunca se migró (has_cost=false).
+      const legacyCost = n(prevData.cost_cop ?? prevData.cost ?? prevData.costo_cop ?? prevData.costo);
+      const legacyComp = n(prevData.competitor_price_cop ?? prevData.competitor_price ?? prevData.precio_competencia ?? prevData.precio_competencia_cop);
+      if (legacyCost > 0 || legacyComp > 0) {
+        await f.setDoc(f.doc(db, 'productCosts', productId), {
+          product_id: productId,
+          cost_cop: legacyCost,
+          competitor_price_cop: legacyComp,
+          margin_pct: Number(prevData.margin_pct) || 0,
+          price_cop: n(product.price_cop),
+          updated_at: f.serverTimestamp(),
+          updated_by: s(opts.updatedBy),
+          migrated: true,
+        }, { merge: true });
+        await f.setDoc(ref, { has_cost: legacyCost > 0 }, { merge: true });
+      }
+    }
+
     if (!previous.exists()) await f.setDoc(f.doc(db, 'inventory', productId), { product_id: productId, stock: 0, min_stock: 0, location: '', updated_at: f.serverTimestamp() }, { merge: true });
-    return { ok: true, mode: previous.exists() ? 'updated' : 'created', id: productId, product: data };
+    return { ok: true, mode: previous.exists() ? 'updated' : 'created', id: productId, product: data, cost_saved: writeCost };
   },
   async setProductActive(productId, active) { const f = await sdk_(); await f.updateDoc(f.doc(getFirestoreDb(), 'products', s(productId)), { active: !!active, updated_at: f.serverTimestamp() }); return { ok: true, active: !!active }; },
   async updateInventoryMeta(data = {}) { const f = await sdk_(); const pid = s(data.product_id); await f.setDoc(f.doc(getFirestoreDb(), 'inventory', pid), { product_id: pid, min_stock: Math.max(0,n(data.min_stock)), location: s(data.location), updated_at: f.serverTimestamp() }, { merge: true }); return { ok: true }; },

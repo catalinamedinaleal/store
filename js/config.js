@@ -1,17 +1,32 @@
 'use strict';
 
-export const BUILD_VERSION = '2026-07-10.2';
+export const BUILD_VERSION = '2026-07-24.1';
 
 export const CURRENCY = 'COP';
 export const LOCALE = 'es-CO';
 export const RESTOCK_PDF_HIDE_PRICES = true;
 
-export const ALLOWED_EMAILS = new Set([
+/* =============================================================================
+   Roles
+   -----------------------------------------------------------------------------
+   ADMIN  : ve costos, márgenes, utilidades y dashboard. Edita la regla de precios.
+   ASESOR : crea/edita productos y registra el costo del proveedor. El precio de
+            venta se calcula solo. No ve márgenes, utilidades ni dashboard.
+
+   ⚠ Si cambias esta lista, cambia TAMBIÉN firestore.rules (misma lista de correos).
+      La interfaz obedece este archivo; la seguridad real la aplica Firestore.
+============================================================================= */
+export const ADMIN_EMAILS = new Set([
   'alekcaballeromusic@gmail.com',
   'catalina.medina.leal@gmail.com',
+]);
+
+export const ASESOR_EMAILS = new Set([
   'adminmusicala@gmail.com',
   'musicalaasesor@gmail.com',
 ]);
+
+export const ALLOWED_EMAILS = new Set([...ADMIN_EMAILS, ...ASESOR_EMAILS]);
 
 export const FIREBASE_CONFIG = Object.freeze({
   apiKey: 'AIzaSyBm8RWGMxw9uz4iMmr0Chf3uiLzMY7TzOE',

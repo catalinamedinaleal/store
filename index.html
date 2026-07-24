@@ -57,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-07-16.3";
+    window.__BUILD__ = "2026-07-24.1";
   </script>
 
   <!-- CSS -->
@@ -222,9 +222,16 @@
         <span class="restockBadge" id="restockCount" hidden>0</span>
       </button>
 
+      <!-- ✅ Solo admin: regla de precios y mantenimiento -->
+      <button class="btn btn--ghost" id="btnPricingRules" type="button"
+        title="Reglas de precio de venta" data-role="admin" hidden>
+        ⚙️ Precios
+      </button>
+
       <div class="pill" id="userPill" hidden>
         <span class="avatar" id="userAvatar" aria-hidden="true">👤</span>
         <span class="mono" id="userEmail">—</span>
+        <span class="badge" id="rolePill" hidden>—</span>
         <button class="btn btn--ghost" id="btnLogout" type="button">Salir</button>
       </div>
     </div>
@@ -285,7 +292,8 @@
         </div>
 
         <div class="hero__right kpis" aria-label="Indicadores">
-          <div class="kpi">
+          <!-- ✅ Solo admin: cifras de venta -->
+          <div class="kpi" data-role="admin" hidden>
             <div class="kpi__label">Ventas hoy</div>
             <div class="kpi__value mono" id="kpiToday">—</div>
           </div>
@@ -306,7 +314,7 @@
         <button class="tab" data-tab="inventory" type="button" aria-selected="false">Inventario</button>
         <button class="tab" data-tab="sales" type="button" aria-selected="false">Ventas</button>
         <button class="tab" data-tab="moves" type="button" aria-selected="false">Movimientos</button>
-        <button class="tab" data-tab="dashboard" type="button" aria-selected="false">Dashboard</button>
+        <button class="tab" data-tab="dashboard" type="button" aria-selected="false" data-role="admin" hidden>Dashboard</button>
         <div class="tabs__spacer"></div>
         <button class="btn btn--ghost" id="btnRefresh" type="button" title="Recargar datos">Actualizar</button>
       </nav>
@@ -323,6 +331,10 @@
             <label class="sr-only" for="qCatalog">Buscar en catálogo</label>
             <input class="input input--sm" id="qCatalog" type="search" autocomplete="off"
               placeholder="Buscar (nombre, marca, categoría, sku, stock)…" />
+            <label class="tiny muted" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
+              <input type="checkbox" id="onlyMissingPrice" />
+              Solo pendientes (sin precio o sin costo)
+            </label>
             <button class="btn btn--primary" id="btnNewProduct" type="button">Nuevo producto</button>
           </div>
         </div>
@@ -351,6 +363,9 @@
                     <span>Precio venta</span><span class="thSortIcon" aria-hidden="true">↕</span>
                   </button>
                 </th>
+                <!-- ✅ Solo admin: costo y utilidad -->
+                <th class="num" data-role="admin" hidden>Costo</th>
+                <th class="num" data-role="admin" hidden>Utilidad</th>
                 <th class="num" data-sort-key="stock">
                   <button class="thSort" type="button" data-sort="stock" aria-label="Ordenar por Stock">
                     <span>Stock</span><span class="thSortIcon" aria-hidden="true">↕</span>
@@ -642,6 +657,22 @@
             <div class="muted tiny">Basado en ventas con status pagado.</div>
           </div>
 
+          <!-- ✅ Ganancias: solo admin -->
+          <div class="card subcard">
+            <h3 class="h3">Utilidad</h3>
+            <div class="row" style="gap:24px;flex-wrap:wrap;">
+              <div class="kpi">
+                <div class="kpi__label">Hoy</div>
+                <div class="kpi__value mono" id="dashProfitToday">—</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi__label">Acumulada</div>
+                <div class="kpi__value mono" id="dashProfitTotal">—</div>
+              </div>
+            </div>
+            <div class="muted tiny" id="dashProfitNote" style="margin-top:8px;">—</div>
+          </div>
+
           <div class="card subcard">
             <h3 class="h3">Stock crítico</h3>
             <div class="tablewrap">
@@ -697,16 +728,16 @@
             <thead>
               <tr>
                 <th>Nombre</th>
-                <th>Marca</th>
                 <th class="num">Cant.</th>
-                <th class="num">Precio unit.</th>
-                <th class="num">Total</th>
+                <!-- ✅ Solo admin: valores del pedido -->
+                <th class="num" data-role="admin" hidden>Precio unit.</th>
+                <th class="num" data-role="admin" hidden>Total</th>
                 <th class="num">—</th>
               </tr>
             </thead>
             <tbody id="restockBody">
               <tr>
-                <td colspan="6" class="muted">
+                <td colspan="5" class="muted">
                   Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.
                 </td>
               </tr>
@@ -721,7 +752,8 @@
             <div class="mono big" id="restockTotalUnits">0</div>
           </div>
 
-          <div style="text-align:right;">
+          <!-- ✅ Solo admin: valor del pedido -->
+          <div style="text-align:right;" data-role="admin" hidden>
             <div class="tiny muted">Total pedido</div>
             <div class="mono big" id="restockTotalCost">$0</div>
           </div>
@@ -793,23 +825,34 @@
         </label>
 
         <label class="field">
-          <span class="label">Costo (COP) <span class="muted tiny">· interno</span></span>
-          <input class="input" id="p_cost" type="number" inputmode="numeric" step="1" min="0" />
-          <span class="muted tiny" style="margin-top:6px;display:block;">Lo que les vale a ustedes.</span>
+          <span class="label">Costo del proveedor (COP)</span>
+          <input class="input" id="p_cost" type="number" inputmode="numeric" step="1" min="0"
+            placeholder="Lo que cobra el proveedor" />
+          <span class="muted tiny" id="p_cost_note" style="margin-top:6px;display:block;">
+            Escribe lo que te cobra el proveedor. El precio de venta se calcula solo.
+          </span>
         </label>
 
-        <label class="field">
+        <!-- ✅ Solo admin: el % de ganancia -->
+        <label class="field" id="f_margin" data-role="admin" hidden>
           <span class="label">Ganancia (%) <span class="muted tiny">· sobre costo</span></span>
           <input class="input" id="p_margin" type="number" inputmode="decimal" step="0.1" min="0" placeholder="30" />
+          <button class="btn btn--tiny btn--ghost" id="btnRecalcPrice" type="button" style="margin-top:6px;align-self:flex-start;">
+            Recalcular con la regla
+          </button>
         </label>
 
         <label class="field">
-          <span class="label">Precio de venta (COP)</span>
-          <input class="input" id="p_price" type="number" inputmode="numeric" step="1" min="0" />
+          <span class="label">Precio de venta al público (COP)</span>
+          <input class="input mono" id="p_price" type="number" inputmode="numeric" step="1" min="0" />
+          <span class="muted tiny" id="p_price_hint" style="margin-top:6px;display:block;">
+            Escribe el costo del proveedor y el precio de venta se calcula solo.
+          </span>
+          <span class="muted tiny" id="p_profit_note" hidden style="margin-top:4px;display:block;"></span>
         </label>
 
-        <!-- ✅ NUEVO: Precio competencia (manual) -->
-        <label class="field">
+        <!-- ✅ Solo admin: precio de competencia -->
+        <label class="field" id="f_comp" data-role="admin" hidden>
           <span class="label">Precio competencia (COP) <span class="muted tiny">· manual</span></span>
           <input class="input" id="p_comp_price" type="number" inputmode="numeric" step="1" min="0" placeholder="Ej: 129900" />
           <span class="muted tiny" style="margin-top:6px;display:block;">Precio de referencia encontrado en mercado.</span>
@@ -830,6 +873,75 @@
         <button class="btn btn--primary" id="btnSaveProduct" type="button">Guardar</button>
         <!-- ✅ Antes era submit/cancel. Ahora solo cierra. -->
         <button class="btn btn--ghost" id="btnCancelProduct" type="button" data-close-dialog="modalProduct">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ✅ Modal: Regla de precios (solo admin) -->
+  <dialog class="modal" id="modalPricing" aria-label="Regla de precio de venta">
+    <form method="dialog" class="modal__card" id="pricingForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">⚙️ Regla de precio de venta</h3>
+          <p class="muted tiny">
+            Define cuánto se le suma al costo del proveedor según el rango. Las asesoras nunca ven estos %:
+            solo escriben el costo y la app les muestra el precio final.
+          </p>
+        </div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalPricing">Cerrar</button>
+      </div>
+
+      <div class="tablewrap">
+        <table class="table table--compact" aria-label="Rangos de ganancia">
+          <thead>
+            <tr>
+              <th>Costo hasta (COP)</th>
+              <th class="num">Ganancia (%)</th>
+              <th>Rango</th>
+              <th class="num">—</th>
+            </tr>
+          </thead>
+          <tbody id="pricingTiersBody">
+            <tr><td colspan="4" class="muted">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="row" style="justify-content:flex-start;margin-top:8px;">
+        <button class="btn btn--tiny btn--ghost" id="btnPricingAddTier" type="button">+ Agregar rango</button>
+      </div>
+
+      <div class="grid2" style="margin-top:12px;">
+        <label class="field">
+          <span class="label">Redondear a múltiplos de (COP)</span>
+          <input class="input" id="pricingRoundTo" type="number" inputmode="numeric" step="100" min="0" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">0 = sin redondeo.</span>
+        </label>
+
+        <label class="field">
+          <span class="label">Modo de redondeo</span>
+          <select class="input" id="pricingRoundMode">
+            <option value="up">Hacia arriba</option>
+            <option value="nearest">Al más cercano</option>
+            <option value="none">Sin redondeo</option>
+          </select>
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Probar con un costo</span>
+          <input class="input" id="pricingPreviewCost" type="number" inputmode="numeric" step="1000" min="0" placeholder="Ej: 120000" />
+          <span class="muted tiny mono" id="pricingPreviewOut" style="margin-top:6px;display:block;">—</span>
+        </label>
+      </div>
+
+      <p class="muted tiny" id="pricingStatus" style="margin-top:10px;">—</p>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSavePricing" type="button">Guardar regla</button>
+        <button class="btn btn--ghost" id="btnMigrateCosts" type="button" title="Mover costos antiguos a la colección privada">
+          Migrar costos antiguos
+        </button>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalPricing">Cancelar</button>
       </div>
     </form>
   </dialog>

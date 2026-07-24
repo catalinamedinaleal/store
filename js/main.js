@@ -22,6 +22,17 @@ import { StoreAPI } from './firebase-store.js';
 import { State } from './state.js';
 import { STORE_CFG, ALLOWED_EMAILS } from './config.js';
 import { FirebaseAuth, initFirebase } from './firebase.js';
+import { Roles } from './roles.js';
+import {
+  DEFAULT_PRICING,
+  normalizePricing,
+  priceFromCost,
+  marginFromCostPrice,
+  describeTiers,
+  describeRounding,
+  tierWarnings,
+  isPricingConfigured,
+} from './pricing.js';
 /* =========================
    CFG helpers (compat layer)
 ========================= */
@@ -297,6 +308,36 @@ export function boot() {
       $('p_precio_competencia') ||
       null,
 
+    // ✅ Roles: campos y pistas del modal de producto
+    f_margin: $('f_margin'),               // contenedor del % de ganancia (admin)
+    f_comp: $('f_comp'),                   // contenedor del precio competencia (admin)
+    p_cost_note: $('p_cost_note'),         // "sin costo registrado" / "solo admin ve el costo"
+    p_price_hint: $('p_price_hint'),       // "precio sugerido automático"
+    p_profit_note: $('p_profit_note'),     // utilidad estimada (admin)
+    btnRecalcPrice: $('btnRecalcPrice'),
+
+    // ✅ Roles: pill y regla de precios
+    rolePill: $('rolePill'),
+    btnPricingRules: $('btnPricingRules'),
+    modalPricing: $('modalPricing'),
+    pricingTiersBody: $('pricingTiersBody'),
+    pricingRoundTo: $('pricingRoundTo'),
+    pricingRoundMode: $('pricingRoundMode'),
+    pricingPreviewCost: $('pricingPreviewCost'),
+    pricingPreviewOut: $('pricingPreviewOut'),
+    btnPricingAddTier: $('btnPricingAddTier'),
+    btnSavePricing: $('btnSavePricing'),
+    btnMigrateCosts: $('btnMigrateCosts'),
+    pricingStatus: $('pricingStatus'),
+
+    // ✅ Catálogo: filtro "sin precio"
+    onlyMissingPrice: $('onlyMissingPrice'),
+
+    // ✅ Dashboard admin (utilidades)
+    dashProfitToday: $('dashProfitToday'),
+    dashProfitTotal: $('dashProfitTotal'),
+    dashProfitNote: $('dashProfitNote'),
+
     modalStock: $('modalStock'),
     stockForm: $('stockForm'),
     btnSaveStock: $('btnSaveStock'),
@@ -506,6 +547,117 @@ export function boot() {
   ========================= */
   const RESTOCK_PDF_HIDE_PRICES = getCfgBool_('RESTOCK_PDF_HIDE_PRICES', true);
 
+  /* El PDF oculta precios por configuración y, además, siempre para quien no
+     tenga permiso de ver costos. */
+  function hideRestockPrices_() {
+    return RESTOCK_PDF_HIDE_PRICES || !Roles.can('see_costs');
+  }
+
+  /* =========================
+     Roles + regla de precios
+     -------------------------
+     - PRICING.settings: rangos de ganancia por costo (Firestore settings/pricing)
+     - COSTS: costos por producto. Solo se carga si el usuario es admin;
+       para asesoras Firestore rechaza la lectura y el mapa queda vacío.
+  ========================= */
+  const PRICING = {
+    settings: normalizePricing(DEFAULT_PRICING), // sin rangos hasta que Firestore responda
+    draft: null,                                 // borrador del modal (no toca settings hasta guardar)
+    loaded: false,
+    inflight: null,
+  };
+
+  function pricingReady_() { return isPricingConfigured(PRICING.settings); }
+
+  const COSTS = {
+    map: new Map(),   // product_id -> { cost_cop, competitor_price_cop, margin_pct }
+    loaded: false,
+    inflight: null,
+  };
+
+  async function ensurePricingLoaded_(force = false) {
+    if (!force && PRICING.loaded) return PRICING.settings;
+    if (PRICING.inflight) return PRICING.inflight;
+
+    PRICING.inflight = (async () => {
+      try {
+        const res = await StoreAPI.getPricingSettings();
+        PRICING.settings = normalizePricing(res?.settings || DEFAULT_PRICING);
+      } catch {
+        // Sin documento o sin permisos: seguimos con la regla por defecto.
+        PRICING.settings = normalizePricing(DEFAULT_PRICING);
+      }
+      PRICING.loaded = true;
+      return PRICING.settings;
+    })().finally(() => { PRICING.inflight = null; });
+
+    return PRICING.inflight;
+  }
+
+  async function ensureCostsLoaded_(force = false) {
+    if (!Roles.can('see_costs')) { COSTS.map = new Map(); COSTS.loaded = true; return COSTS.map; }
+    if (!force && COSTS.loaded) return COSTS.map;
+    if (COSTS.inflight) return COSTS.inflight;
+
+    COSTS.inflight = (async () => {
+      try {
+        const res = await StoreAPI.listProductCosts();
+        const m = new Map();
+        for (const c of (res?.items || [])) {
+          const pid = String(c.product_id || c.id || '').trim();
+          if (pid) m.set(pid, c);
+        }
+        COSTS.map = m;
+      } catch {
+        COSTS.map = new Map();
+      }
+      COSTS.loaded = true;
+      return COSTS.map;
+    })().finally(() => { COSTS.inflight = null; });
+
+    return COSTS.inflight;
+  }
+
+  function costFor_(productId) {
+    const c = COSTS.map.get(String(productId || '').trim());
+    return c ? toInt(c.cost_cop) : 0;
+  }
+
+  function competitorFor_(productId) {
+    const c = COSTS.map.get(String(productId || '').trim());
+    return c ? toInt(c.competitor_price_cop) : 0;
+  }
+
+  /* Precio de venta sugerido a partir del costo del proveedor. */
+  function suggestPrice_(cost) {
+    return priceFromCost(cost, PRICING.settings);
+  }
+
+  /* Muestra/oculta todo lo marcado como data-role="admin" en el HTML. */
+  function applyRoleUI_() {
+    const admin = Roles.isAdmin();
+
+    $$('[data-role="admin"]').forEach((node) => {
+      if (!node || node === document.body) return; // nunca ocultar la página entera
+      node.hidden = !admin;
+    });
+
+    if (el.rolePill) {
+      el.rolePill.textContent = Roles.label();
+      el.rolePill.hidden = !Roles.isStaff();
+    }
+
+    // La asesora nunca escribe el precio a mano: sale del costo.
+    if (el.p_price) {
+      const locked = !Roles.can('override_price');
+      el.p_price.readOnly = locked;
+      el.p_price.classList.toggle('is-locked', locked);
+    }
+
+    // Si estaba parada en una pestaña que ya no le corresponde, la devolvemos.
+    if (!admin && currentTab_() === 'dashboard') showTab('catalog');
+  }
+
   /* =========================
      Token / API plumbing
   ========================= */
@@ -658,7 +810,11 @@ export function boot() {
   let RENDER_GUARD = 0;
 
   function showTab(tabName) {
-    const next = TAB_IDS.includes(tabName) ? tabName : 'catalog';
+    let next = TAB_IDS.includes(tabName) ? tabName : 'catalog';
+
+    // Dashboard = ganancias. Solo admin.
+    if (next === 'dashboard' && !Roles.can('see_dashboard')) next = 'catalog';
+
     const prev = currentTab_();
 
     if (prev === next) {
@@ -1052,6 +1208,8 @@ export function boot() {
     LOAD.dashboardInflight = (async () => {
       const d = await loadDashboardWithRetry_();
       State.setDashboard(d || null);
+      // Utilidades (admin): se salta solo si el rol no puede verlas.
+      await ensureProfitLoaded_(true).catch(() => {});
       LOAD.dashboardLoadedAt = Date.now();
     })().finally(() => { LOAD.dashboardInflight = null; });
 
@@ -1094,6 +1252,7 @@ export function boot() {
   async function refreshAfterProductChange_() {
     await Promise.allSettled([
       ensureProductsLoaded_(true),
+      ensureCostsLoaded_(true),
       ensureDashboardLoaded_(true),
     ]);
     markSync_();
@@ -1127,8 +1286,8 @@ export function boot() {
       const wantsProducts = ['catalog', 'sales', 'restock'].includes(tab);
       const wantsInventory = ['inventory', 'dashboard'].includes(tab);
 
-      const tasks = [ensureDashboardLoaded_(force)];
-      if (wantsProducts) tasks.push(ensureProductsLoaded_(force));
+      const tasks = [ensureDashboardLoaded_(force), ensurePricingLoaded_(force)];
+      if (wantsProducts) tasks.push(ensureProductsLoaded_(force), ensureCostsLoaded_(force));
       if (wantsInventory) tasks.push(ensureInventoryLoaded_(force));
 
       await Promise.allSettled(tasks);
@@ -1177,7 +1336,44 @@ export function boot() {
     if (el.dashToday) el.dashToday.textContent = st.dashboard ? fmtCOP(toInt(dash.today_total_cop)) : '—';
   }
 
+  /* Utilidades: solo admin (necesita leer productCosts). */
+  const PROFIT = { data: null, loaded: false, inflight: null };
+
+  async function ensureProfitLoaded_(force = false) {
+    if (!Roles.can('see_profit')) { PROFIT.data = null; return null; }
+    if (!force && PROFIT.loaded) return PROFIT.data;
+    if (PROFIT.inflight) return PROFIT.inflight;
+
+    PROFIT.inflight = (async () => {
+      try { PROFIT.data = await StoreAPI.profitReport(); }
+      catch { PROFIT.data = null; }
+      PROFIT.loaded = true;
+      return PROFIT.data;
+    })().finally(() => { PROFIT.inflight = null; });
+
+    return PROFIT.inflight;
+  }
+
+  function renderProfit_() {
+    if (!Roles.can('see_profit')) return;
+    const p = PROFIT.data;
+
+    if (el.dashProfitToday) el.dashProfitToday.textContent = p ? fmtCOP(toInt(p.profit_today_cop)) : '—';
+    if (el.dashProfitTotal) el.dashProfitTotal.textContent = p ? fmtCOP(toInt(p.profit_cop)) : '—';
+
+    if (el.dashProfitNote) {
+      if (!p) {
+        el.dashProfitNote.textContent = 'Sin datos de utilidad todavía.';
+      } else if (toInt(p.units_without_cost) > 0) {
+        el.dashProfitNote.textContent = `Ojo: ${toInt(p.units_without_cost)} unidad(es) vendidas sin costo registrado. La utilidad real es menor a la mostrada.`;
+      } else {
+        el.dashProfitNote.textContent = 'Calculado sobre ventas pagadas, precio de venta menos costo del proveedor.';
+      }
+    }
+  }
+
   function renderDashboard_() {
+    renderProfit_();
     if (!el.lowStockBody) return;
 
     const dash = State.get().dashboard || null;
@@ -1209,8 +1405,11 @@ export function boot() {
     const rawQ = el.qCatalog?.value || '';
     const q = String(rawQ).toLowerCase().trim();
 
+    const showCosts = Roles.can('see_costs');
+    const colCount = 7 + (showCosts ? 2 : 0);
+
     const src = Array.isArray(st.products) ? st.products : [];
-    const list = q
+    let list = q
       ? src.filter(p => p && (
           String(p.id || '').toLowerCase().includes(q) ||
           String(p.name || '').toLowerCase().includes(q) ||
@@ -1220,8 +1419,13 @@ export function boot() {
         ))
       : src;
 
+    // ✅ Filtro "solo pendientes": lo que aún no tiene precio o no tiene costo.
+    if (el.onlyMissingPrice?.checked) {
+      list = list.filter(p => !pickPriceCOP_(p) || !(p?.has_cost || pickCostCOP_(p) > 0));
+    }
+
     if (!list.length) {
-      el.catalogBody.innerHTML = `<tr><td colspan="7" class="muted">No hay resultados.</td></tr>`;
+      el.catalogBody.innerHTML = `<tr><td colspan="${colCount}" class="muted">No hay resultados.</td></tr>`;
       return;
     }
 
@@ -1238,9 +1442,12 @@ export function boot() {
         : '';
 
       const price = pickPriceCOP_(p);
+      const pid = String(p.id || '').trim();
+      const cost = showCosts ? (costFor_(pid) || pickCostCOP_(p)) : 0;
+      const hasCost = !!p.has_cost || pickCostCOP_(p) > 0 || cost > 0;
 
-      // ✅ Precio de competencia opcional (si existe en data)
-      const comp = pickCompetitorCOP_(p);
+      // ✅ Precio de competencia: solo admin
+      const comp = Roles.can('see_competitor') ? (competitorFor_(pid) || pickCompetitorCOP_(p)) : 0;
       const compLine = comp > 0 ? ` · <span class="mono">Comp:</span> <span class="mono">${escapeHtml(fmtCOP(comp))}</span>` : '';
       const desc = String(p.desc || p.description || '').trim();
       const sku = String(p.sku || '').trim();
@@ -1252,6 +1459,19 @@ export function boot() {
 
       const restockBtn = `<button class="btn btn--tiny btn--ghost" data-act="restock_add" data-id="${escapeHtml(p.id)}">Restock</button>`;
 
+      // Lo que la asesora necesita ver de un vistazo: qué falta por precificar.
+      const priceCell = price > 0
+        ? fmtCOP(price)
+        : `<span class="badge badge--warn">Sin precio</span>`;
+      const missingCostBadge = (!hasCost && price > 0)
+        ? ` <span class="badge badge--warn" title="Falta registrar el costo del proveedor">Sin costo</span>`
+        : '';
+
+      const costCells = showCosts
+        ? `<td class="num mono">${cost > 0 ? fmtCOP(cost) : '—'}</td>
+           <td class="num mono">${(cost > 0 && price > 0) ? fmtCOP(Math.max(0, price - cost)) : '—'}</td>`
+        : '';
+
       return `
         <tr>
           <td>
@@ -1262,7 +1482,8 @@ export function boot() {
           </td>
           <td>${escapeHtml(p.brand || '')}</td>
           <td>${escapeHtml(p.category || '')}</td>
-          <td class="num mono">${fmtCOP(price)}</td>
+          <td class="num mono">${priceCell}${missingCostBadge}</td>
+          ${costCells}
           <td class="num mono">${toInt(stock)} ${stockBadge}</td>
           <td>${badge}</td>
           <td class="num actionsCell">
@@ -2061,9 +2282,12 @@ export function boot() {
   }
 
   /* =========================
-     Pricing helpers
+     Pricing helpers (modal producto)
+     -------------------------
+     Asesora : escribe el costo → el precio de venta sale solo (readonly).
+     Admin   : igual, pero puede ver/ajustar el % y sobrescribir el precio.
   ========================= */
-  const PRICING = { lock: false };
+  const PRICE_SYNC = { lock: false, manualMargin: false };
 
   function computePriceFromCostMargin_(cost, margin) {
     const c = Math.max(0, toInt(cost));
@@ -2073,36 +2297,89 @@ export function boot() {
   }
 
   function computeMarginFromCostPrice_(cost, price) {
-    const c = Math.max(0, toInt(cost));
-    const p = Math.max(0, toInt(price));
-    if (!c) return 0;
-    const m = ((p / c) - 1) * 100;
-    return Math.max(0, Math.round(m * 10) / 10);
+    return marginFromCostPrice(cost, price);
   }
 
-  function syncPriceFromCostMargin_() {
-    if (PRICING.lock || !el.p_margin) return;
-    PRICING.lock = true;
+  /* Costo → precio, usando la regla por rangos (o el % manual si el admin lo tocó). */
+  function applyPriceRule_({ manual = false } = {}) {
+    if (PRICE_SYNC.lock) return;
+    PRICE_SYNC.lock = true;
+
     try {
       const cost = toInt(el.p_cost?.value);
-      const margin = toFloat(el.p_margin?.value);
-      const price = computePriceFromCostMargin_(cost, margin);
+
+      if (!cost) {
+        if (el.p_price && !Roles.can('override_price')) el.p_price.value = '';
+        if (el.p_margin) el.p_margin.value = '';
+        renderPriceHint_(0, toInt(el.p_price?.value), null);
+        return;
+      }
+
+      // Sin regla de precios configurada no inventamos un precio.
+      if (!pricingReady_() && !(manual && Roles.can('see_margin'))) {
+        renderPriceHint_(cost, toInt(el.p_price?.value), null);
+        return;
+      }
+
+      const useManualMargin = manual && Roles.can('see_margin') && String(el.p_margin?.value || '').trim() !== '';
+
+      let price, marginPct, tierLabel = '';
+      if (useManualMargin) {
+        marginPct = Math.max(0, toFloat(el.p_margin.value));
+        price = computePriceFromCostMargin_(cost, marginPct);
+      } else {
+        const sug = suggestPrice_(cost);
+        price = sug.price_cop;
+        marginPct = sug.margin_pct;
+        tierLabel = sug.tier_label;
+        if (el.p_margin) el.p_margin.value = String(marginPct);
+      }
+
       if (el.p_price) el.p_price.value = String(price);
+      renderPriceHint_(cost, price, tierLabel);
     } finally {
-      PRICING.lock = false;
+      PRICE_SYNC.lock = false;
     }
   }
 
+  /* El admin escribió un precio a mano: recalculamos el % real. */
   function syncMarginFromCostPrice_() {
-    if (PRICING.lock || !el.p_margin) return;
-    PRICING.lock = true;
+    if (PRICE_SYNC.lock) return;
+    PRICE_SYNC.lock = true;
     try {
       const cost = toInt(el.p_cost?.value);
       const price = toInt(el.p_price?.value);
-      const margin = computeMarginFromCostPrice_(cost, price);
-      el.p_margin.value = cost ? String(margin) : '';
+      if (el.p_margin) el.p_margin.value = cost ? String(computeMarginFromCostPrice_(cost, price)) : '';
+      renderPriceHint_(cost, price, null);
     } finally {
-      PRICING.lock = false;
+      PRICE_SYNC.lock = false;
+    }
+  }
+
+  function renderPriceHint_(cost, price, tierLabel) {
+    const c = Math.max(0, toInt(cost));
+    const p = Math.max(0, toInt(price));
+
+    if (el.p_price_hint) {
+      if (!c) {
+        el.p_price_hint.textContent = 'Escribe el costo del proveedor y el precio de venta se calcula solo.';
+      } else if (!pricingReady_()) {
+        el.p_price_hint.textContent = Roles.can('edit_pricing')
+          ? '⚠ Todavía no hay regla de precios guardada. Configúrala en ⚙️ Precios (o escribe el precio a mano).'
+          : '⚠ Falta configurar la regla de precios. Avísale a un admin para que la guarde.';
+      } else if (Roles.can('see_margin')) {
+        const pct = computeMarginFromCostPrice_(c, p);
+        const rango = tierLabel ? ` · rango ${tierLabel}` : '';
+        el.p_price_hint.textContent = `Regla aplicada: +${pct}%${rango}`;
+      } else {
+        el.p_price_hint.textContent = 'Precio de venta al público calculado automáticamente ✅';
+      }
+    }
+
+    if (el.p_profit_note) {
+      const show = Roles.can('see_margin') && c > 0;
+      el.p_profit_note.hidden = !show;
+      if (show) el.p_profit_note.textContent = `Utilidad por unidad: ${fmtCOP(Math.max(0, p - c))}`;
     }
   }
 
@@ -2125,16 +2402,45 @@ export function boot() {
     if (el.p_category) el.p_category.value = p?.category || '';
     if (el.p_sku) el.p_sku.value = p?.sku || '';
 
+    const pid = String(p?.id || '').trim();
     const price = pickPriceCOP_(p);
-    const cost = pickCostCOP_(p);
-    const comp = pickCompetitorCOP_(p);
 
-    if (el.p_price) el.p_price.value = String(price);
-    if (el.p_cost) el.p_cost.value = String(cost);
+    // El costo vive en productCosts (solo admin lo lee). pickCostCOP_ cubre
+    // productos viejos que todavía lo tengan incrustado.
+    const cost = Roles.can('see_costs')
+      ? (costFor_(pid) || pickCostCOP_(p))
+      : 0;
+    const comp = Roles.can('see_competitor')
+      ? (competitorFor_(pid) || pickCompetitorCOP_(p))
+      : 0;
+
+    const hasCostSaved = !!(p?.has_cost) || cost > 0;
+
+    if (el.p_price) el.p_price.value = price ? String(price) : '';
+    if (el.p_cost) {
+      el.p_cost.value = cost ? String(cost) : '';
+      el.p_cost.placeholder = (!Roles.can('see_costs') && hasCostSaved)
+        ? 'Ya registrado (no visible)'
+        : 'Lo que cobra el proveedor';
+    }
     if (el.p_margin) el.p_margin.value = cost ? String(computeMarginFromCostPrice_(cost, price)) : '';
-
-    // ✅ competitivo opcional
     if (el.p_competitor_price) el.p_competitor_price.value = comp ? String(comp) : '';
+
+    if (el.p_cost_note) {
+      if (Roles.can('see_costs')) {
+        el.p_cost_note.textContent = 'Lo que les vale a ustedes.';
+      } else if (hasCostSaved) {
+        el.p_cost_note.textContent = 'Este producto ya tiene costo guardado. Escríbelo solo si cambió; si lo dejas vacío no se toca.';
+      } else {
+        el.p_cost_note.textContent = 'Escribe lo que te cobra el proveedor. El precio de venta se calcula solo.';
+      }
+    }
+
+    PRICE_SYNC.manualMargin = false;
+
+    // Producto sin precio: aplicamos la regla de una vez si ya hay costo.
+    if (cost > 0 && !price) applyPriceRule_();
+    else renderPriceHint_(cost, price, '');
 
     if (el.p_desc) el.p_desc.value = p?.desc || '';
     if (el.p_image) el.p_image.value = p?.image_url || '';
@@ -2144,12 +2450,18 @@ export function boot() {
 
   function readProductForm_() {
     const id = String(el.p_id?.value || '').trim();
-    const cost = toInt(el.p_cost?.value);
+    const costRaw = String(el.p_cost?.value ?? '').trim();
+    const cost = toInt(costRaw);
     const price = toInt(el.p_price?.value);
-    const margin = el.p_margin ? Math.max(0, toFloat(el.p_margin.value)) : 0;
 
-    // ✅ competitivo opcional
-    const comp = el.p_competitor_price ? toInt(el.p_competitor_price.value) : 0;
+    // El % guardado: el que puso el admin, o el que dicta la regla por rangos.
+    const margin = Roles.can('see_margin') && el.p_margin
+      ? Math.max(0, toFloat(el.p_margin.value))
+      : (cost ? computeMarginFromCostPrice_(cost, price) : 0);
+
+    const comp = (Roles.can('see_competitor') && el.p_competitor_price)
+      ? toInt(el.p_competitor_price.value)
+      : 0;
 
     return {
       id,
@@ -2161,21 +2473,14 @@ export function boot() {
 
       price_cop: price,
       cost_cop: cost,
-
-      // compat keys
-      price, cost,
-      precio_cop: price, costo_cop: cost,
-      precio: price, costo: cost,
-
-      // ✅ campo nuevo (varios alias por si tu backend/Sheet usa otro nombre)
       competitor_price_cop: comp,
-      competitor_price: comp,
-      precio_competencia: comp,
-      precio_competencia_cop: comp,
-
       margin_pct: margin,
+
       desc: safeStr_(el.p_desc?.value, 4000),
       image_url: safeStr_(el.p_image?.value, 1200),
+
+      // Si el campo quedó vacío, NO tocamos el costo ya guardado.
+      _costTouched: costRaw !== '' && cost > 0,
     };
   }
 
@@ -2189,11 +2494,29 @@ export function boot() {
       if (el.p_id) el.p_id.value = newId;
     }
 
+    if (!prod.price_cop) {
+      toast(
+        pricingReady_()
+          ? 'Falta el precio de venta. Escribe el costo del proveedor y sale solo.'
+          : 'Falta configurar la regla de precios (⚙️ Precios). Sin ella no se puede calcular el precio de venta.',
+        false
+      );
+      return;
+    }
+
+    const writeCost = !!prod._costTouched;
+    delete prod._costTouched;
+
     setBusy_(true, 'Guardando producto…');
     try {
-      const res = await StoreAPI.upsertProduct(prod);
+      const res = await StoreAPI.upsertProduct(prod, {
+        writeCost,
+        includeCompetitor: Roles.can('see_competitor'),
+        updatedBy: Roles.email(),
+      });
       toast(res?.mode === 'created' ? 'Producto creado ✅' : 'Producto actualizado ✅', true);
       el.modalProduct?.close?.();
+      if (writeCost) COSTS.loaded = false; // el costo cambió: recargar para admin
       await refreshAfterProductChange_();
     } catch (e) {
       toast(e?.message || String(e), false);
@@ -2370,12 +2693,15 @@ export function boot() {
     const totals = State.restockTotals();
 
     if (!items.length) {
-      el.restockBody.innerHTML = `<tr><td colspan="5" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>`;
+      const cols = Roles.can('see_costs') ? 5 : 3;
+      el.restockBody.innerHTML = `<tr><td colspan="${cols}" class="muted">Aún no hay ítems. Agrega desde <b>Catálogo</b> con “Restock”.</td></tr>`;
       if (el.restockTotalUnits) el.restockTotalUnits.textContent = '0';
       if (el.restockTotalCost) el.restockTotalCost.textContent = fmtCOP(0);
       restoreFocus_(snap);
       return;
     }
+
+    const showCosts = Roles.can('see_costs');
 
     let rowsHtml = '';
     for (let i = 0; i < items.length; i++) {
@@ -2393,16 +2719,21 @@ export function boot() {
         <div class="cellSub muted tiny">${escapeHtml(desc)}</div>
       `;
 
+      // Sin permiso de costos no mostramos columnas de dinero (mostrarían $0 y confunden).
+      const moneyCells = showCosts
+        ? `<td class="num mono">
+             <input class="miniNum" type="number" min="0" step="1" value="${cost}" data-restock-cost="${escapeHtml(id)}" />
+           </td>
+           <td class="num mono">${fmtCOP(subtotal)}</td>`
+        : '';
+
       rowsHtml += `
         <tr>
           <td>${label}</td>
           <td class="num mono">
             <input class="miniNum" type="number" min="0" step="1" value="${qty}" data-restock-qty="${escapeHtml(id)}" />
           </td>
-          <td class="num mono">
-            <input class="miniNum" type="number" min="0" step="1" value="${cost}" data-restock-cost="${escapeHtml(id)}" />
-          </td>
-          <td class="num mono">${fmtCOP(subtotal)}</td>
+          ${moneyCells}
           <td class="num">
             <button class="btn btn--tiny btn--ghost" data-restock-del="${escapeHtml(id)}" title="Quitar">✕</button>
           </td>
@@ -2452,7 +2783,8 @@ export function boot() {
       desc: p.desc || p.description || '',
       brand: p.brand || '',
       sku: p.sku || '',
-      cost_cop: pickCostCOP_(p),
+      // El costo solo lo conoce el admin; para la asesora va en 0 y no se muestra.
+      cost_cop: Roles.can('see_costs') ? (costFor_(p.id) || pickCostCOP_(p)) : 0,
     };
 
     State.restockAddProduct(product, 1);
@@ -2467,11 +2799,13 @@ export function boot() {
     const totals = State.restockTotals();
     const items = Array.isArray(r.items) ? r.items : [];
 
+    const hidePrices = hideRestockPrices_();
+
     const lines = items.map(it => {
       const qty = Math.max(0, toInt(it.qty));
       const desc = restockDesc_(it);
 
-      if (RESTOCK_PDF_HIDE_PRICES) {
+      if (hidePrices) {
         return `• ${it.name || it.id} — ${desc}  x${qty}`;
       }
 
@@ -2480,7 +2814,7 @@ export function boot() {
       return `• ${it.name || it.id} — ${desc}  x${qty}  @ ${fmtCOP(cost)}  = ${fmtCOP(sub)}`;
     });
 
-    const footer = RESTOCK_PDF_HIDE_PRICES
+    const footer = hidePrices
       ? [`Unidades: ${toInt(totals.units)}`, `Items: ${toInt(totals.items)}`]
       : [`Total: ${fmtCOP(toInt(totals.cost_cop))}`, `Unidades: ${toInt(totals.units)}`, `Items: ${toInt(totals.items)}`];
 
@@ -2544,7 +2878,9 @@ export function boot() {
       throw new Error('autoTable no está cargado (jspdf-autotable)');
     }
 
-    const head = RESTOCK_PDF_HIDE_PRICES
+    const hidePrices = hideRestockPrices_();
+
+    const head = hidePrices
       ? [['Producto', 'Descripción', 'Cant.']]
       : [['Producto', 'Descripción', 'Cant.', 'Costo', 'Subtotal']];
 
@@ -2552,7 +2888,7 @@ export function boot() {
       const qty = Math.max(0, toInt(it.qty));
       const desc = restockDesc_(it);
 
-      if (RESTOCK_PDF_HIDE_PRICES) {
+      if (hidePrices) {
         return [String(it.name || it.id || ''), String(desc || '—'), qty];
       }
 
@@ -2561,7 +2897,7 @@ export function boot() {
       return [String(it.name || it.id || ''), String(desc || '—'), qty, fmtCOP(cost), fmtCOP(sub)];
     });
 
-    const columnStyles = RESTOCK_PDF_HIDE_PRICES
+    const columnStyles = hidePrices
       ? { 2: { halign: 'right' } }
       : { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } };
 
@@ -2577,7 +2913,7 @@ export function boot() {
         doc.setFontSize(9);
         doc.setTextColor(70);
 
-        const footer = RESTOCK_PDF_HIDE_PRICES
+        const footer = hidePrices
           ? `Unidades: ${toInt(totals.units)}`
           : `Unidades: ${toInt(totals.units)}   ·   Total: ${fmtCOP(toInt(totals.cost_cop))}`;
 
@@ -2664,13 +3000,67 @@ export function boot() {
       ev.preventDefault();
     });
 
-    on(el.p_cost, 'input', () => {
-      if (!el.p_margin) return;
-      if (String(el.p_margin.value || '').trim() !== '') syncPriceFromCostMargin_();
-      else syncMarginFromCostPrice_();
+    // Costo → precio de venta automático (el corazón del flujo de la asesora)
+    on(el.p_cost, 'input', debounce(() => applyPriceRule_({ manual: PRICE_SYNC.manualMargin }), 90));
+
+    // Admin: si toca el %, manda el % hasta que recalcule con la regla
+    on(el.p_margin, 'input', () => {
+      if (!Roles.can('see_margin')) return;
+      PRICE_SYNC.manualMargin = true;
+      applyPriceRule_({ manual: true });
     });
-    on(el.p_margin, 'input', () => syncPriceFromCostMargin_());
-    on(el.p_price, 'input', () => syncMarginFromCostPrice_());
+
+    // Admin: precio escrito a mano → recalcula el % real
+    on(el.p_price, 'input', () => {
+      if (!Roles.can('override_price')) return;
+      PRICE_SYNC.manualMargin = true;
+      syncMarginFromCostPrice_();
+    });
+
+    on(el.btnRecalcPrice, 'click', () => {
+      PRICE_SYNC.manualMargin = false;
+      applyPriceRule_();
+      toast('Precio recalculado con la regla ✅', true);
+    });
+
+    // ✅ Catálogo: filtro de pendientes por precificar
+    on(el.onlyMissingPrice, 'change', () => renderCatalog_());
+
+    // ✅ Regla de precios (admin)
+    on(el.btnPricingRules, 'click', () => { openPricingModal_().catch(e => toast(e?.message || String(e), false)); });
+    on(el.btnSavePricing, 'click', async () => { await savePricingRules_(); });
+    on(el.btnMigrateCosts, 'click', async () => { await runCostMigration_(); });
+    on(el.pricingPreviewCost, 'input', debounce(() => renderPricingPreview_(), 120));
+    on(el.pricingRoundTo, 'input', debounce(() => { markPricingDirty_(); renderPricingPreview_(); }, 120));
+    on(el.pricingRoundMode, 'change', () => { markPricingDirty_(); renderPricingPreview_(); });
+    on(el.pricingTiersBody, 'input', debounce(() => { markPricingDirty_(); renderPricingPreview_(); }, 120));
+
+    on(el.btnPricingAddTier, 'click', () => {
+      markPricingDirty_();
+      syncPricingDraft_();
+      const tiers = PRICING.draft.tiers;
+      const capped = tiers.filter(t => t.max > 0);
+      const open = tiers.find(t => t.max <= 0) || { max: 0, margin_pct: 0 };
+      const lastMax = capped.length ? capped[capped.length - 1].max : 0;
+
+      PRICING.draft.tiers = capped.concat([
+        { max: lastMax ? lastMax * 2 : 50000, margin_pct: open.margin_pct },
+        open,
+      ]);
+      renderPricingForm_();
+    });
+
+    on(el.pricingTiersBody, 'click', (ev) => {
+      const btn = ev.target?.closest?.('[data-tier-del]');
+      if (!btn) return;
+
+      markPricingDirty_();
+      syncPricingDraft_();
+      const idx = toInt(btn.dataset.tierDel);
+      const next = PRICING.draft.tiers.filter((_, i) => i !== idx);
+      PRICING.draft.tiers = next.length ? next : [{ max: 0, margin_pct: 0 }];
+      renderPricingForm_();
+    });
     on(el.s_product_query, 'input', debounce(() => syncStockProductSelection_(), 120));
     on(el.s_mode, 'change', () => syncStockModeUI_());
 
@@ -2883,6 +3273,187 @@ export function boot() {
   }
 
   /* =========================
+     Regla de precios (solo admin)
+  ========================= */
+  async function openPricingModal_() {
+    if (!Roles.can('edit_pricing')) { toast('Solo admin puede cambiar la regla de precios.', false); return; }
+
+    // Pintamos ya con lo que tenemos y refrescamos cuando Firestore responda,
+    // para que el modal nunca se quede en "Cargando…".
+    resetPricingDraft_();
+    renderPricingForm_();
+    el.modalPricing?.showModal?.();
+
+    await ensurePricingLoaded_(true).catch(() => {});
+
+    // Si el admin ya empezó a escribir, la respuesta tardía de Firestore NO le
+    // borra lo que lleva hecho.
+    if (el.modalPricing?.open && !PRICING.draftTouched) {
+      resetPricingDraft_();
+      renderPricingForm_();
+    }
+  }
+
+  const markPricingDirty_ = () => { PRICING.draftTouched = true; };
+
+  /* El modal trabaja sobre un borrador: si cancelas, la regla vigente no cambia. */
+  function resetPricingDraft_() {
+    const s = normalizePricing(PRICING.settings);
+    PRICING.draftTouched = false;
+    PRICING.draft = {
+      version: s.version,
+      round_to: s.round_to,
+      round_mode: s.round_mode,
+      // Sin regla previa arrancamos con un único tramo abierto para llenar.
+      tiers: s.tiers.length ? s.tiers.map(t => ({ ...t })) : [{ max: 0, margin_pct: 0 }],
+    };
+  }
+
+  function renderPricingForm_() {
+    if (!PRICING.draft) resetPricingDraft_();
+    const s = normalizePricing({ ...PRICING.draft, tiers: PRICING.draft.tiers });
+
+    if (el.pricingRoundTo) el.pricingRoundTo.value = String(PRICING.draft.round_to);
+    if (el.pricingRoundMode) el.pricingRoundMode.value = PRICING.draft.round_mode;
+
+    if (el.pricingTiersBody) {
+      // describeTiers necesita rangos válidos; si el borrador aún está en 0%,
+      // igual mostramos las filas para que el admin las llene.
+      const tiers = s.tiers.length
+        ? describeTiers(s)
+        : PRICING.draft.tiers.map(t => ({ ...t, label: '—' }));
+
+      el.pricingTiersBody.innerHTML = tiers.map((t, i) => {
+        const isOpen = t.max <= 0;
+        return `
+          <tr>
+            <td>
+              ${isOpen
+                ? `<span class="muted tiny">En adelante</span>`
+                : `<input class="input input--sm mono" type="number" min="0" step="1000" value="${toInt(t.max)}" data-tier-max="${i}" />`}
+            </td>
+            <td class="num">
+              <input class="input input--sm mono" type="number" min="0" step="1" value="${toFloat(t.margin_pct)}" data-tier-margin="${i}" />
+            </td>
+            <td class="tiny muted">${escapeHtml(t.label)}</td>
+            <td class="num">
+              ${isOpen ? '' : `<button class="btn btn--tiny btn--ghost" type="button" data-tier-del="${i}" title="Quitar rango">✕</button>`}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    renderPricingPreview_();
+
+    if (el.pricingStatus) {
+      if (!pricingReady_()) {
+        el.pricingStatus.textContent =
+          '⚠ Aún no hay regla guardada. Los porcentajes no viven en el código (el repositorio es público): ' +
+          'defínelos aquí y quedan protegidos en Firestore. Hasta entonces la app no sugiere precios.';
+      } else {
+        el.pricingStatus.textContent = normalizePricing(PRICING.settings).updated_by
+          ? `Regla vigente · última edición: ${normalizePricing(PRICING.settings).updated_by}`
+          : 'Regla vigente.';
+      }
+    }
+  }
+
+  /* Vuelca lo escrito en pantalla al borrador (sin guardar en Firestore). */
+  function syncPricingDraft_() {
+    if (!PRICING.draft) resetPricingDraft_();
+
+    PRICING.draft.tiers = PRICING.draft.tiers.map((t, i) => {
+      const maxEl = el.pricingTiersBody?.querySelector(`[data-tier-max="${i}"]`);
+      const marginEl = el.pricingTiersBody?.querySelector(`[data-tier-margin="${i}"]`);
+      return {
+        max: maxEl ? Math.max(0, toInt(maxEl.value)) : Math.max(0, toInt(t.max)),
+        margin_pct: marginEl ? Math.max(0, toFloat(marginEl.value)) : Math.max(0, toFloat(t.margin_pct)),
+      };
+    });
+
+    PRICING.draft.round_to = Math.max(0, toInt(el.pricingRoundTo?.value ?? PRICING.draft.round_to));
+    PRICING.draft.round_mode = String(el.pricingRoundMode?.value || PRICING.draft.round_mode);
+
+    return PRICING.draft;
+  }
+
+  /* Lee el formulario y lo devuelve ya normalizado (sin guardar todavía). */
+  function readPricingForm_() {
+    const d = syncPricingDraft_();
+    return normalizePricing({ ...d, updated_by: normalizePricing(PRICING.settings).updated_by });
+  }
+
+  function renderPricingPreview_() {
+    if (!el.pricingPreviewOut) return;
+
+    const draft = readPricingForm_();
+    const cost = toInt(el.pricingPreviewCost?.value);
+
+    const warns = tierWarnings(draft).map(w => `⚠ ${w.message}`).join('\n');
+
+    let head = describeRounding(draft);
+    if (!draft.configured) {
+      head = 'Escribe el % de ganancia de cada rango para ver la prueba.';
+    } else if (cost) {
+      const r = priceFromCost(cost, draft);
+      head = `Costo ${fmtCOP(cost)} → precio ${fmtCOP(r.price_cop)} (+${r.margin_pct}%, ${r.tier_label}) · utilidad ${fmtCOP(r.price_cop - cost)}`;
+    }
+
+    el.pricingPreviewOut.textContent = warns ? `${head}\n\n${warns}` : head;
+    el.pricingPreviewOut.style.whiteSpace = 'pre-line';
+  }
+
+  async function savePricingRules_() {
+    if (!Roles.can('edit_pricing')) return;
+
+    const draft = readPricingForm_();
+
+    if (!draft.configured) {
+      toast('Escribe al menos un % de ganancia mayor que 0 antes de guardar.', false);
+      return;
+    }
+
+    setBusy_(true, 'Guardando regla de precios…');
+    try {
+      await StoreAPI.savePricingSettings(draft, Roles.email());
+      PRICING.settings = draft;
+      PRICING.loaded = true;
+      toast('Regla de precios actualizada ✅', true);
+      el.modalPricing?.close?.();
+      renderActive_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function runCostMigration_() {
+    if (!Roles.can('manage_data')) return;
+
+    const ok = confirm(
+      'Esto mueve los costos que hoy están dentro de cada producto a la colección privada productCosts, ' +
+      'y los borra de products/ para que las asesoras no puedan leerlos.\n\n' +
+      'Se ejecuta una sola vez. ¿Continuar?'
+    );
+    if (!ok) return;
+
+    setBusy_(true, 'Migrando costos…');
+    try {
+      const res = await StoreAPI.migrateCostsOutOfProducts(Roles.email());
+      toast(`Listo: ${toInt(res.moved)} costo(s) movidos, ${toInt(res.cleaned)} producto(s) limpiados ✅`, true);
+      COSTS.loaded = false;
+      await Promise.allSettled([ensureProductsLoaded_(true), ensureCostsLoaded_(true)]);
+      renderActive_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  /* =========================
      Auth state handling
   ========================= */
   function attachAuthListener_() {
@@ -2891,6 +3462,8 @@ export function boot() {
         State.setUser(user || null);
 
         if (!user) {
+          Roles.clear();
+          applyRoleUI_();
           if (el.userPill) el.userPill.hidden = true;
           setView('auth');
           showTab('catalog');
@@ -2900,6 +3473,8 @@ export function boot() {
 
         const email = String(user.email || '').trim().toLowerCase();
         if (!ALLOWED_EMAILS.has(email)) {
+          Roles.clear();
+          applyRoleUI_();
           State.setIdToken('');
           setStoreApiToken_('');
           if (el.userPill) el.userPill.hidden = true;
@@ -2910,6 +3485,10 @@ export function boot() {
           try { await FB.signOut(FB.auth); } catch {}
           return;
         }
+
+        // Rol antes de pintar nada: define qué se ve y qué no.
+        Roles.setEmail(email);
+        applyRoleUI_();
 
         if (el.userPill) el.userPill.hidden = false;
         if (el.userEmail) el.userEmail.textContent = user.email || '—';
@@ -2935,12 +3514,16 @@ export function boot() {
         }
 
         setView('app');
+        applyRoleUI_();
         showTab('catalog');
 
         try { State.hydrateFromCache(); } catch {}
 
+        // Regla de precios y costos (los costos solo si el rol puede leerlos).
+        await Promise.allSettled([ensurePricingLoaded_(true), ensureCostsLoaded_(true)]);
+
         await loadAll_({ force: false });
-        toast('Sesión activa ✅', true);
+        toast(`Sesión activa ✅ · ${Roles.label()}`, true);
       } catch (err) {
         console.error(err);
         toast(err?.message || String(err), false);

@@ -1,14 +1,93 @@
 rules_version = '2';
+
+/* =============================================================================
+   Musicala Store · reglas de acceso
+   -----------------------------------------------------------------------------
+   ADMIN  : todo, incluidos costos y utilidades.
+   ASESOR : catálogo, inventario y ventas. Puede ESCRIBIR el costo que le cotiza
+            el proveedor, pero NO puede leer los costos guardados ni escribir
+            costos dentro de products/.
+
+   ⚠ Esta lista de correos debe coincidir con js/config.js.
+   ⚠ settings/pricing (los % de ganancia por rango) es legible por todo el equipo
+     porque el navegador necesita la regla para calcular el precio. No aparece en
+     ninguna pantalla de la asesora, pero técnicamente es legible desde la consola
+     del navegador. Para ocultarla de verdad haría falta calcular el precio en un
+     servidor (Cloud Function).
+============================================================================= */
 service cloud.firestore {
   match /databases/{database}/documents {
-    function authorized() {
-      return request.auth != null && request.auth.token.email in [
+
+    function userEmail() {
+      return request.auth != null && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function isAdmin() {
+      return userEmail() in [
         'alekcaballeromusic@gmail.com',
         'catalina.medina.leal@gmail.com'
       ];
     }
+
+    function isAsesor() {
+      return userEmail() in [
+        'adminmusicala@gmail.com',
+        'musicalaasesor@gmail.com'
+      ];
+    }
+
+    function isStaff() {
+      return isAdmin() || isAsesor();
+    }
+
+    // Campos de costo que NO pueden quedar guardados dentro de products/
+    function hasCostFields() {
+      return request.resource.data.keys().hasAny([
+        'cost_cop', 'cost', 'costo_cop', 'costo',
+        'margin_pct',
+        'competitor_price_cop', 'competitor_price',
+        'precio_competencia', 'precio_competencia_cop',
+        'precioCompetencia', 'precioCompetenciaCOP'
+      ]);
+    }
+
+    /* Catálogo: todo el equipo lee y edita, pero sin costos incrustados. */
+    match /products/{productId} {
+      allow read: if isStaff();
+      allow create, update: if isAdmin() || (isAsesor() && !hasCostFields());
+      allow delete: if isAdmin();
+    }
+
+    /* Costos: solo admin LEE. La asesora escribe lo que le cotiza el proveedor. */
+    match /productCosts/{productId} {
+      allow read: if isAdmin();
+      allow create, update: if isStaff();
+      allow delete: if isAdmin();
+    }
+
+    /* Regla de precios: la lee el equipo (para calcular), la edita solo admin. */
+    match /settings/{docId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    match /inventory/{productId} {
+      allow read, write: if isStaff();
+    }
+
+    match /inventoryMoves/{moveId} {
+      allow read, write: if isStaff();
+    }
+
+    match /sales/{saleId} {
+      allow read, write: if isStaff();
+    }
+
+    /* Todo lo demás: cerrado. */
     match /{document=**} {
-      allow read, write: if authorized();
+      allow read, write: if false;
     }
   }
 }
