@@ -3033,20 +3033,20 @@ export function boot() {
     on(el.pricingPreviewCost, 'input', debounce(() => renderPricingPreview_(), 120));
     on(el.pricingRoundTo, 'input', debounce(() => { markPricingDirty_(); renderPricingPreview_(); }, 120));
     on(el.pricingRoundMode, 'change', () => { markPricingDirty_(); renderPricingPreview_(); });
-    on(el.pricingTiersBody, 'input', debounce(() => { markPricingDirty_(); renderPricingPreview_(); }, 120));
+    on(el.pricingTiersBody, 'input', debounce(() => {
+      markPricingDirty_();
+      syncPricingDraft_();
+      refreshPricingLabels_();
+      renderPricingPreview_();
+    }, 120));
 
     on(el.btnPricingAddTier, 'click', () => {
       markPricingDirty_();
       syncPricingDraft_();
-      const tiers = PRICING.draft.tiers;
-      const capped = tiers.filter(t => t.max > 0);
-      const open = tiers.find(t => t.max <= 0) || { max: 0, margin_pct: 0 };
-      const lastMax = capped.length ? capped[capped.length - 1].max : 0;
 
-      PRICING.draft.tiers = capped.concat([
-        { max: lastMax ? lastMax * 2 : 50000, margin_pct: open.margin_pct },
-        open,
-      ]);
+      // Inserta un rango con tope justo antes del tramo abierto (que va último).
+      const tiers = PRICING.draft.tiers;
+      tiers.splice(Math.max(0, tiers.length - 1), 0, { max: 0, margin_pct: 0 });
       renderPricingForm_();
     });
 
@@ -3296,6 +3296,28 @@ export function boot() {
 
   const markPricingDirty_ = () => { PRICING.draftTouched = true; };
 
+  /* Etiqueta legible de una fila del editor de rangos. */
+  function pricingRowLabel_(tiers, i) {
+    const isOpen = (i === tiers.length - 1);
+    const max = toInt(tiers[i]?.max);
+    const prevMax = i > 0 ? toInt(tiers[i - 1].max) : 0;
+
+    if (isOpen) return prevMax > 0 ? `Más de ${fmtCOP(prevMax)}` : 'Cualquier costo';
+    if (max <= 0) return '—';
+    return prevMax > 0 ? `${fmtCOP(prevMax + 1)} – ${fmtCOP(max)}` : `Hasta ${fmtCOP(max)}`;
+  }
+
+  /* Refresca solo la columna "Rango" mientras el admin escribe: repintar la
+     tabla entera le quitaría el foco del campo. */
+  function refreshPricingLabels_() {
+    if (!el.pricingTiersBody || !PRICING.draft) return;
+    const rows = el.pricingTiersBody.querySelectorAll('tr');
+    for (let i = 0; i < rows.length; i++) {
+      const cell = rows[i].children[2];
+      if (cell) cell.textContent = pricingRowLabel_(PRICING.draft.tiers, i);
+    }
+  }
+
   /* El modal trabaja sobre un borrador: si cancelas, la regla vigente no cambia. */
   function resetPricingDraft_() {
     const s = normalizePricing(PRICING.settings);
@@ -3304,38 +3326,45 @@ export function boot() {
       version: s.version,
       round_to: s.round_to,
       round_mode: s.round_mode,
-      // Sin regla previa arrancamos con un único tramo abierto para llenar.
-      tiers: s.tiers.length ? s.tiers.map(t => ({ ...t })) : [{ max: 0, margin_pct: 0 }],
+      // Sin regla previa arrancamos con un rango con tope (para llenar) MÁS el
+      // tramo abierto. Si solo dejáramos el abierto no habría dónde escribir el
+      // tope del primer rango.
+      tiers: s.tiers.length
+        ? s.tiers.map(t => ({ ...t }))
+        : [{ max: 0, margin_pct: 0 }, { max: 0, margin_pct: 0 }],
     };
   }
 
+  /* La última fila SIEMPRE es el tramo abierto ("en adelante"); las demás llevan
+     tope editable, aunque todavía estén vacías. */
   function renderPricingForm_() {
     if (!PRICING.draft) resetPricingDraft_();
-    const s = normalizePricing({ ...PRICING.draft, tiers: PRICING.draft.tiers });
 
     if (el.pricingRoundTo) el.pricingRoundTo.value = String(PRICING.draft.round_to);
     if (el.pricingRoundMode) el.pricingRoundMode.value = PRICING.draft.round_mode;
 
     if (el.pricingTiersBody) {
-      // describeTiers necesita rangos válidos; si el borrador aún está en 0%,
-      // igual mostramos las filas para que el admin las llene.
-      const tiers = s.tiers.length
-        ? describeTiers(s)
-        : PRICING.draft.tiers.map(t => ({ ...t, label: '—' }));
+      const tiers = PRICING.draft.tiers;
+      const last = tiers.length - 1;
 
       el.pricingTiersBody.innerHTML = tiers.map((t, i) => {
-        const isOpen = t.max <= 0;
+        const isOpen = (i === last);
+        const max = toInt(t.max);
+        const label = pricingRowLabel_(tiers, i);
+
         return `
           <tr>
             <td>
               ${isOpen
                 ? `<span class="muted tiny">En adelante</span>`
-                : `<input class="input input--sm mono" type="number" min="0" step="1000" value="${toInt(t.max)}" data-tier-max="${i}" />`}
+                : `<input class="input input--sm mono" type="number" min="0" step="1000"
+                     value="${max > 0 ? max : ''}" placeholder="Ej: 50000" data-tier-max="${i}" />`}
             </td>
             <td class="num">
-              <input class="input input--sm mono" type="number" min="0" step="1" value="${toFloat(t.margin_pct)}" data-tier-margin="${i}" />
+              <input class="input input--sm mono" type="number" min="0" step="1"
+                value="${toFloat(t.margin_pct) > 0 ? toFloat(t.margin_pct) : ''}" placeholder="Ej: 45" data-tier-margin="${i}" />
             </td>
-            <td class="tiny muted">${escapeHtml(t.label)}</td>
+            <td class="tiny muted">${escapeHtml(label)}</td>
             <td class="num">
               ${isOpen ? '' : `<button class="btn btn--tiny btn--ghost" type="button" data-tier-del="${i}" title="Quitar rango">✕</button>`}
             </td>
@@ -3406,6 +3435,27 @@ export function boot() {
 
   async function savePricingRules_() {
     if (!Roles.can('edit_pricing')) return;
+
+    syncPricingDraft_();
+
+    // Fila a medio llenar: mejor avisar que descartarla en silencio.
+    const rows = PRICING.draft.tiers;
+    for (let i = 0; i < rows.length - 1; i++) {
+      const { max, margin_pct } = rows[i];
+      if (max <= 0 && margin_pct > 0) {
+        toast(`Al rango ${i + 1} le falta el tope ("Costo hasta"). Escríbelo o quita la fila.`, false);
+        return;
+      }
+      if (max > 0 && margin_pct <= 0) {
+        toast(`Al rango ${i + 1} le falta el % de ganancia.`, false);
+        return;
+      }
+    }
+
+    if (toFloat(rows[rows.length - 1]?.margin_pct) <= 0) {
+      toast('Falta el % del tramo "En adelante": es el que se aplica a todo lo demás.', false);
+      return;
+    }
 
     const draft = readPricingForm_();
 
