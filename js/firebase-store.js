@@ -93,15 +93,19 @@ export const StoreAPI = {
 
       const cost = n(p.cost_cop ?? p.cost ?? p.costo_cop ?? p.costo);
       const comp = n(p.competitor_price_cop ?? p.competitor_price ?? p.precio_competencia ?? p.precio_competencia_cop);
+      const margin = Number(p.margin_pct) || 0;
       const hasLegacy = COST_FIELDS_LEGACY.some(k => p[k] !== undefined);
       if (!hasLegacy) continue;
 
-      if (cost > 0 || comp > 0) {
+      // Si hay CUALQUIER dato que valga la pena, se copia antes de borrarlo.
+      // (Antes solo miraba costo y competencia: un producto con solo % de
+      //  ganancia perdía el dato al limpiarlo de products/.)
+      if (cost > 0 || comp > 0 || margin > 0) {
         batch.set(f.doc(db, 'productCosts', pid), {
           product_id: pid,
           cost_cop: cost,
           competitor_price_cop: comp,
-          margin_pct: Number(p.margin_pct) || 0,
+          margin_pct: margin,
           price_cop: n(p.price_cop ?? p.price ?? p.precio_cop ?? p.precio),
           updated_at: f.serverTimestamp(),
           updated_by: s(updatedBy),
