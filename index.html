@@ -60,6 +60,33 @@
     window.__BUILD__ = "2026-07-24.1";
   </script>
 
+  <!--
+    Cache bust de TODOS los módulos, no solo de main.js.
+    main.js se carga con ?v=BUILD, pero sus imports (config.js, roles.js, …) son
+    especificadores sin versión: tras un deploy el navegador puede mezclar main.js
+    nuevo con config.js viejo y la app revienta con "does not provide an export".
+    Este import map redirige cada módulo a su URL versionada.
+  -->
+  <script>
+    (function () {
+      var v = encodeURIComponent(window.__BUILD__ || "");
+      if (!v || !HTMLScriptElement.supports || !HTMLScriptElement.supports("importmap")) return;
+
+      var mods = ["config.js", "roles.js", "pricing.js", "state.js", "firebase.js", "firebase-store.js", "main.js"];
+      var imports = {};
+
+      for (var i = 0; i < mods.length; i++) {
+        var href = new URL("./js/" + mods[i], document.baseURI).href;
+        imports[href] = href + "?v=" + v;
+      }
+
+      var s = document.createElement("script");
+      s.type = "importmap";
+      s.textContent = JSON.stringify({ imports: imports });
+      document.currentScript.after(s);
+    })();
+  </script>
+
   <!-- CSS -->
   <link rel="preload" href="./styles.css" as="style" />
   <link rel="stylesheet" href="./styles.css" id="mainStyles" />
