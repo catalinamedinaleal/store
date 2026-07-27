@@ -57,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-07-24.2";
+    window.__BUILD__ = "2026-07-27.1";
   </script>
 
   <!--
@@ -340,6 +340,9 @@
         <button class="tab is-active" data-tab="catalog" type="button" aria-selected="true">Catálogo</button>
         <button class="tab" data-tab="inventory" type="button" aria-selected="false">Inventario</button>
         <button class="tab" data-tab="sales" type="button" aria-selected="false">Ventas</button>
+        <button class="tab" data-tab="leads" type="button" aria-selected="false">
+          Interesados <span class="restockBadge" id="leadsBadge" hidden>0</span>
+        </button>
         <button class="tab" data-tab="moves" type="button" aria-selected="false">Movimientos</button>
         <button class="tab" data-tab="dashboard" type="button" aria-selected="false" data-role="admin" hidden>Dashboard</button>
         <div class="tabs__spacer"></div>
@@ -603,6 +606,49 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- TAB: Interesados -->
+      <section class="card tabview" id="tab-leads" hidden>
+        <div class="card__head">
+          <div>
+            <h2 class="h2">Interesados</h2>
+            <p class="muted tiny">Gente que preguntó y aún no compra. Se les hace seguimiento hasta cerrar la venta.</p>
+          </div>
+
+          <div class="card__actions" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+            <label class="sr-only" for="qLeads">Buscar interesados</label>
+            <input class="input input--sm" id="qLeads" type="search" autocomplete="off"
+              placeholder="Buscar por nombre, teléfono o interés…" />
+            <label class="tiny muted" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
+              <input type="checkbox" id="onlyLeadsDue" />
+              Solo por contactar
+            </label>
+            <button class="btn btn--primary" id="btnNewLead" type="button">Nuevo interesado</button>
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table class="table" id="tblLeads" aria-label="Tabla de interesados">
+            <thead>
+              <tr>
+                <th>Persona</th>
+                <th>Le interesa</th>
+                <th>Estado</th>
+                <th>Próximo contacto</th>
+                <th>Último seguimiento</th>
+                <th class="num">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="leadsBody">
+              <tr><td colspan="6" class="muted">Cargando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="tiny muted" style="margin-top:10px;">
+          Al convertir en venta se abre el carrito con la persona y el producto ya cargados.
+        </p>
       </section>
 
       <!-- TAB: Moves -->
@@ -900,6 +946,126 @@
         <button class="btn btn--primary" id="btnSaveProduct" type="button">Guardar</button>
         <!-- ✅ Antes era submit/cancel. Ahora solo cierra. -->
         <button class="btn btn--ghost" id="btnCancelProduct" type="button" data-close-dialog="modalProduct">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ✅ Modal: Interesado -->
+  <dialog class="modal" id="modalLead" aria-label="Interesado">
+    <form method="dialog" class="modal__card" id="leadForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3" id="leadTitle">Interesado</h3>
+          <p class="muted tiny">Alguien que preguntó y todavía no compra.</p>
+        </div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalLead">Cerrar</button>
+      </div>
+
+      <div class="grid2">
+        <input id="l_id" type="hidden" />
+
+        <label class="field">
+          <span class="label">Nombre</span>
+          <input class="input" id="l_name" type="text" required placeholder="Ej: Laura Gómez" />
+        </label>
+
+        <label class="field">
+          <span class="label">WhatsApp / teléfono</span>
+          <input class="input mono" id="l_phone" type="tel" inputmode="tel" placeholder="Ej: 3001234567" />
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Producto del catálogo <span class="muted tiny">· opcional</span></span>
+          <input class="input" id="l_product_query" type="search" list="saleProductsList" autocomplete="off"
+            placeholder="Buscar en el catálogo…" />
+          <input id="l_product_id" type="hidden" />
+          <span class="muted tiny" id="l_product_hint" style="margin-top:6px;display:block;">
+            Si todavía no existe en el catálogo, déjalo vacío y descríbelo abajo.
+          </span>
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Qué está buscando</span>
+          <input class="input" id="l_interest" type="text" placeholder="Ej: guitarra acústica para principiante, presupuesto ~$600.000" />
+        </label>
+
+        <label class="field">
+          <span class="label">Próximo contacto</span>
+          <input class="input" id="l_next_contact" type="date" />
+          <span class="muted tiny" style="margin-top:6px;display:block;">Para que no se te pase.</span>
+        </label>
+
+        <label class="field">
+          <span class="label">Estado</span>
+          <select class="input" id="l_status">
+            <option value="nuevo">Nuevo</option>
+            <option value="seguimiento">En seguimiento</option>
+            <option value="ganado">Compró ✅</option>
+            <option value="perdido">No compró</option>
+          </select>
+        </label>
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">Notas</span>
+          <textarea class="input" id="l_notes" rows="2" placeholder="Lo que te dijo, dudas, presupuesto…"></textarea>
+        </label>
+      </div>
+
+      <div class="tablewrap" id="l_historyWrap" hidden style="margin-top:12px;">
+        <table class="table table--compact" aria-label="Historial de seguimiento">
+          <thead>
+            <tr><th>Fecha</th><th>Nota</th><th>Quién</th></tr>
+          </thead>
+          <tbody id="l_historyBody"></tbody>
+        </table>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveLead" type="button">Guardar</button>
+        <button class="btn btn--ghost" id="btnDeleteLead" type="button" style="color:#b42318;">Eliminar</button>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalLead">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ✅ Modal: Seguimiento -->
+  <dialog class="modal" id="modalFollowUp" aria-label="Registrar seguimiento">
+    <form method="dialog" class="modal__card" id="followUpForm">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">Registrar seguimiento</h3>
+          <p class="muted tiny" id="fu_who">—</p>
+        </div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalFollowUp">Cerrar</button>
+      </div>
+
+      <div class="grid2">
+        <input id="fu_lead_id" type="hidden" />
+
+        <label class="field" style="grid-column: 1 / -1;">
+          <span class="label">¿Qué pasó en este contacto?</span>
+          <textarea class="input" id="fu_note" rows="3" placeholder="Ej: la llamé, lo va a pensar hasta el pago de quincena"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="label">Volver a contactar el</span>
+          <input class="input" id="fu_next" type="date" />
+        </label>
+
+        <div class="field">
+          <span class="label">Atajos</span>
+          <div class="row" style="gap:6px;flex-wrap:wrap;">
+            <button class="btn btn--tiny btn--ghost" type="button" data-fu-days="1">Mañana</button>
+            <button class="btn btn--tiny btn--ghost" type="button" data-fu-days="3">En 3 días</button>
+            <button class="btn btn--tiny btn--ghost" type="button" data-fu-days="7">En 1 semana</button>
+            <button class="btn btn--tiny btn--ghost" type="button" data-fu-days="15">En 15 días</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="btnSaveFollowUp" type="button">Guardar seguimiento</button>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalFollowUp">Cancelar</button>
       </div>
     </form>
   </dialog>

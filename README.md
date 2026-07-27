@@ -30,6 +30,16 @@ regla la app no sugiere precios: avisa que falta configurarla, en vez de inventa
 Para definirla: entrar como admin → **⚙️ Precios** → agregar rangos → Guardar.
 Cambiar la regla no modifica los precios ya guardados; aplica a lo que se cree o edite después.
 
+## Interesados
+
+Gente que preguntó por algo y todavía no compra. Se registra con su WhatsApp, qué
+busca (un producto del catálogo o texto libre si aún no existe) y una fecha de
+próximo contacto. La pestaña muestra un contador con cuántos toca contactar hoy o
+están atrasados, y ordena la lista poniendo primero lo vencido.
+
+*Convertir en venta* abre el carrito con la persona y el producto ya cargados;
+al guardar la venta, el interesado queda marcado como "compró" y enlazado a ella.
+
 ## Dónde viven los datos
 
 | Colección | Contenido | Quién lee |
@@ -37,6 +47,7 @@ Cambiar la regla no modifica los precios ya guardados; aplica a lo que se cree o
 | `products` | nombre, marca, categoría, SKU, descripción, **precio de venta**, activo | todo el equipo |
 | `productCosts` | **costo del proveedor**, competencia, margen | solo admin |
 | `settings/pricing` | rangos de % de ganancia | todo el equipo (ver nota) |
+| `leads` | interesados y su historial de seguimiento | todo el equipo |
 | `inventory`, `inventoryMoves`, `sales` | stock, movimientos, ventas | todo el equipo |
 
 Separar `productCosts` es lo que hace que el rol sea real: aunque una asesora abra la consola

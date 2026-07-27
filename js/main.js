@@ -277,6 +277,37 @@ export function boot() {
     btnSaveSaleDetail: $('btnSaveSaleDetail'),
     btnDeleteSale: $('btnDeleteSale'),
 
+    // ✅ Interesados (leads)
+    qLeads: $('qLeads'),
+    onlyLeadsDue: $('onlyLeadsDue'),
+    btnNewLead: $('btnNewLead'),
+    leadsBody: $('leadsBody'),
+    leadsBadge: $('leadsBadge'),
+    modalLead: $('modalLead'),
+    leadForm: $('leadForm'),
+    leadTitle: $('leadTitle'),
+    l_id: $('l_id'),
+    l_name: $('l_name'),
+    l_phone: $('l_phone'),
+    l_product_query: $('l_product_query'),
+    l_product_id: $('l_product_id'),
+    l_product_hint: $('l_product_hint'),
+    l_interest: $('l_interest'),
+    l_next_contact: $('l_next_contact'),
+    l_status: $('l_status'),
+    l_notes: $('l_notes'),
+    l_historyWrap: $('l_historyWrap'),
+    l_historyBody: $('l_historyBody'),
+    btnSaveLead: $('btnSaveLead'),
+    btnDeleteLead: $('btnDeleteLead'),
+
+    modalFollowUp: $('modalFollowUp'),
+    fu_lead_id: $('fu_lead_id'),
+    fu_who: $('fu_who'),
+    fu_note: $('fu_note'),
+    fu_next: $('fu_next'),
+    btnSaveFollowUp: $('btnSaveFollowUp'),
+
     // moves
     qMoves: $('qMoves'),
     movesBody: $('movesBody'),
@@ -795,7 +826,7 @@ export function boot() {
   /* =========================
      Tabs (tolerantes)
   ========================= */
-  const TAB_IDS = ['catalog', 'inventory', 'sales', 'moves', 'dashboard', 'restock'];
+  const TAB_IDS = ['catalog', 'inventory', 'sales', 'leads', 'moves', 'dashboard', 'restock'];
 
   function tabSection_(name) {
     return $('tab-' + name);
@@ -845,6 +876,10 @@ export function boot() {
       ensureInventoryLoaded_(),
     ]).then(() => buildInventoryProductDatalist_()).finally(after);
     else if (next === 'sales') ensureProductsLoaded_().finally(() => { syncSalesUI_(); after(); });
+    else if (next === 'leads') Promise.all([
+      ensureProductsLoaded_().catch(() => {}),
+      ensureLeadsLoaded_().catch(() => {}),
+    ]).finally(after);
     else if (next === 'moves') { after(); loadMoves_(State.get().movesQuery || ''); }
     else if (next === 'restock') ensureProductsLoaded_().finally(after);
     else if (next === 'dashboard') ensureDashboardLoaded_().finally(after);
@@ -1286,7 +1321,9 @@ export function boot() {
       const wantsProducts = ['catalog', 'sales', 'restock'].includes(tab);
       const wantsInventory = ['inventory', 'dashboard'].includes(tab);
 
-      const tasks = [ensureDashboardLoaded_(force), ensurePricingLoaded_(force)];
+      // Los interesados se cargan siempre: el contador de la pestaña ("por
+      // contactar") debe estar bien aunque no estés parada en esa sección.
+      const tasks = [ensureDashboardLoaded_(force), ensurePricingLoaded_(force), ensureLeadsLoaded_(force)];
       if (wantsProducts) tasks.push(ensureProductsLoaded_(force), ensureCostsLoaded_(force));
       if (wantsInventory) tasks.push(ensureInventoryLoaded_(force));
 
@@ -1314,11 +1351,14 @@ export function boot() {
 
       renderKPIs_();
 
+      renderLeadsBadge_();
+
       const tab = currentTab_();
       if (tab === 'catalog') renderCatalog_();
       else if (tab === 'inventory') renderInventory_();
       else if (tab === 'dashboard') renderDashboard_();
       else if (tab === 'sales') { renderOrders_(); scheduleSaleRender_(); syncSalesUI_(); }
+      else if (tab === 'leads') renderLeads_();
       else if (tab === 'moves') renderMoves_();
       else if (tab === 'restock') scheduleRestockRender_();
     });
@@ -1654,6 +1694,8 @@ export function boot() {
   ========================= */
   function openNewSale_() {
     State.openSale();
+    // Venta nueva "limpia": si venía de un interesado, quien la abre lo vuelve a enlazar.
+    LEAD_LINK.leadId = '';
     if (el.saleSearch) el.saleSearch.value = '';
     if (el.saleCustomer) el.saleCustomer.value = '';
     if (el.saleNotes) el.saleNotes.value = '';
@@ -1667,6 +1709,7 @@ export function boot() {
 
   function closeSale_() {
     State.closeSale();
+    LEAD_LINK.leadId = '';
     scheduleSaleRender_();
     syncSalesUI_();
   }
@@ -1976,7 +2019,10 @@ export function boot() {
       }
 
       toast(`${sale.status === 'pending' ? 'Pedido' : 'Venta'} guardada ✅ (${fmtCOP(toInt(res?.total_cop ?? computedTotal))})`, true);
+
+      const pendingLeadId = LEAD_LINK.leadId; // closeSale_ lo limpia
       closeSale_();
+      if (pendingLeadId) await closeLeadAfterSale_(res?.id, pendingLeadId);
 
       await refreshAfterSale_();
     } catch (e) {
@@ -3026,6 +3072,51 @@ export function boot() {
     // ✅ Catálogo: filtro de pendientes por precificar
     on(el.onlyMissingPrice, 'change', () => renderCatalog_());
 
+    // ✅ Interesados
+    on(el.qLeads, 'input', debounce(() => renderLeads_(), 120));
+    on(el.onlyLeadsDue, 'change', () => renderLeads_());
+    on(el.btnNewLead, 'click', async () => {
+      await ensureProductsLoaded_().catch(() => {});
+      openLeadModal_(null);
+    });
+    on(el.btnSaveLead, 'click', async () => { await saveLead_(); });
+    on(el.btnDeleteLead, 'click', async () => { await deleteLead_(); });
+    on(el.btnSaveFollowUp, 'click', async () => { await saveFollowUp_(); });
+
+    on(el.leadForm, 'submit', (ev) => ev.preventDefault());
+    on(el.followUpForm, 'submit', (ev) => ev.preventDefault());
+
+    // Atajos de fecha del seguimiento ("mañana", "en 3 días"…)
+    on(el.modalFollowUp, 'click', (ev) => {
+      const b = ev.target?.closest?.('[data-fu-days]');
+      if (!b || !el.fu_next) return;
+      el.fu_next.value = addDaysISODate_(toInt(b.dataset.fuDays));
+    });
+
+    // Acciones de cada fila de interesados
+    on(el.leadsBody, 'click', async (ev) => {
+      const b = ev.target?.closest?.('[data-lead-act]');
+      if (!b) return;
+
+      const act = b.dataset.leadAct;
+      const id = b.dataset.id;
+      if (!act || !id) return;
+
+      try {
+        if (act === 'follow') openFollowUpModal_(id);
+        else if (act === 'convert') await convertLeadToSale_(id);
+        else if (act === 'lost') await markLeadLost_(id);
+        else if (act === 'reopen') await reopenLead_(id);
+        else if (act === 'edit') {
+          await ensureProductsLoaded_().catch(() => {});
+          const lead = (State.get().leads || []).find(l => String(l.id) === String(id));
+          if (lead) openLeadModal_(lead);
+        }
+      } catch (e) {
+        toast(e?.message || String(e), false);
+      }
+    });
+
     // ✅ Regla de precios (admin)
     on(el.btnPricingRules, 'click', () => { openPricingModal_().catch(e => toast(e?.message || String(e), false)); });
     on(el.btnSavePricing, 'click', async () => { await savePricingRules_(); });
@@ -3270,6 +3361,412 @@ export function boot() {
       if (b.dataset?.act === 'restock_open') openRestockUI_();
       if (b.dataset?.tab === 'restock' && tabSection_('restock')) showTab('restock');
     }, { passive: true });
+  }
+
+  /* =========================
+     Interesados (leads)
+     -------------------------
+     Alguien pregunta por una guitarra pero no se decide: queda aquí con una
+     fecha de próximo contacto, y se le hace seguimiento hasta que compra.
+  ========================= */
+  // Solo clases que existen en styles.css: .badge (verde), --warn (ámbar), --off (rojo).
+  const LEAD_STATUS = Object.freeze({
+    nuevo: { label: 'Nuevo', cls: 'badge--warn' },
+    seguimiento: { label: 'En seguimiento', cls: 'badge--warn' },
+    ganado: { label: 'Compró', cls: '' },
+    perdido: { label: 'No compró', cls: 'badge--off' },
+  });
+
+  const LEADS_LOAD = { inflight: null, loadedOnce: false };
+
+  /* Enlace temporal interesado → venta en curso. */
+  const LEAD_LINK = { leadId: '' };
+
+  function todayISODate_() {
+    const d = new Date();
+    const pad = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  function addDaysISODate_(days) {
+    const d = new Date();
+    d.setDate(d.getDate() + Math.max(0, toInt(days)));
+    const pad = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  function leadIsActive_(lead) {
+    const s = String(lead?.status || 'nuevo');
+    return s !== 'ganado' && s !== 'perdido';
+  }
+
+  /* 'overdue' | 'today' | 'future' | 'none' */
+  function leadDueState_(lead) {
+    if (!leadIsActive_(lead)) return 'none';
+    const when = String(lead?.next_contact_at || '').trim();
+    if (!when) return 'none';
+    const today = todayISODate_();
+    if (when < today) return 'overdue';
+    if (when === today) return 'today';
+    return 'future';
+  }
+
+  function leadsDueCount_() {
+    const list = Array.isArray(State.get().leads) ? State.get().leads : [];
+    return list.filter(l => ['overdue', 'today'].includes(leadDueState_(l))).length;
+  }
+
+  function fmtDateOnly_(iso) {
+    const raw = String(iso || '').trim();
+    if (!raw) return '—';
+    const [y, m, d] = raw.split('-').map(Number);
+    if (!y || !m || !d) return raw;
+    try {
+      return new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+        .format(new Date(y, m - 1, d));
+    } catch { return raw; }
+  }
+
+  function waLink_(phone) {
+    const digits = String(phone || '').replace(/\D/g, '');
+    if (digits.length < 7) return '';
+    const full = digits.length === 10 ? `57${digits}` : digits; // celular colombiano
+    return `https://wa.me/${full}`;
+  }
+
+  async function ensureLeadsLoaded_(force = false) {
+    // Igual que el catálogo: si ya hay datos (caché local), pintamos de una y
+    // no dejamos la tabla en "Cargando…" esperando la red.
+    const hasCached = Array.isArray(State.get().leads) && State.get().leads.length > 0;
+    if (!force && (LEADS_LOAD.loadedOnce || hasCached)) return;
+    if (LEADS_LOAD.inflight) return LEADS_LOAD.inflight;
+
+    LEADS_LOAD.inflight = (async () => {
+      try {
+        const res = await StoreAPI.listLeads();
+        State.setLeads(Array.isArray(res?.items) ? res.items : []);
+        LEADS_LOAD.loadedOnce = true;
+      } catch (e) {
+        console.warn('[leads]', e);
+      }
+    })().finally(() => { LEADS_LOAD.inflight = null; });
+
+    return LEADS_LOAD.inflight;
+  }
+
+  async function refreshAfterLeadChange_() {
+    await ensureLeadsLoaded_(true).catch(() => {});
+    renderActive_();
+  }
+
+  function renderLeadsBadge_() {
+    if (!el.leadsBadge) return;
+    const n = leadsDueCount_();
+    el.leadsBadge.textContent = String(n);
+    el.leadsBadge.hidden = n === 0;
+  }
+
+  function renderLeads_() {
+    if (!el.leadsBody) return;
+
+    const st = State.get();
+    const q = String(el.qLeads?.value || '').toLowerCase().trim();
+    const onlyDue = !!el.onlyLeadsDue?.checked;
+
+    let list = Array.isArray(st.leads) ? st.leads.slice() : [];
+
+    if (q) {
+      list = list.filter(l => [l.name, l.phone, l.interest, l.product_name]
+        .map(x => String(x || '').toLowerCase()).join(' ').includes(q));
+    }
+    if (onlyDue) list = list.filter(l => ['overdue', 'today'].includes(leadDueState_(l)));
+
+    // Primero los que tocan hoy o están atrasados; los cerrados al final.
+    const rank = (l) => {
+      const d = leadDueState_(l);
+      if (d === 'overdue') return 0;
+      if (d === 'today') return 1;
+      if (!leadIsActive_(l)) return 4;
+      return d === 'future' ? 2 : 3;
+    };
+    list.sort((a, b) => (rank(a) - rank(b)) || String(a.next_contact_at || '').localeCompare(String(b.next_contact_at || '')));
+
+    if (!list.length) {
+      el.leadsBody.innerHTML = `<tr><td colspan="6" class="muted">${
+        q || onlyDue ? 'No hay resultados.' : 'Aún no hay interesados. Agrega el primero con “Nuevo interesado”.'
+      }</td></tr>`;
+      return;
+    }
+
+    const idx = State.productsIndex();
+
+    el.leadsBody.innerHTML = list.map(l => {
+      const id = escapeHtml(String(l.id || ''));
+      const due = leadDueState_(l);
+      const st_ = LEAD_STATUS[String(l.status || 'nuevo')] || LEAD_STATUS.nuevo;
+
+      const wa = waLink_(l.phone);
+      const persona = `
+        <div class="cellTitle">${escapeHtml(l.name || '—')}</div>
+        <div class="cellSub muted tiny">${
+          l.phone
+            ? (wa
+                ? `<a href="${escapeHtml(wa)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.phone)} · WhatsApp</a>`
+                : escapeHtml(l.phone))
+            : 'Sin teléfono'
+        }</div>
+      `;
+
+      const prod = l.product_id ? idx.get(String(l.product_id)) : null;
+      const interes = `
+        <div>${escapeHtml(prod?.name || l.product_name || l.interest || '—')}</div>
+        ${prod && l.interest ? `<div class="cellSub muted tiny">${escapeHtml(l.interest)}</div>` : ''}
+        ${!prod && l.product_id ? `<div class="cellSub muted tiny">Producto ya no existe</div>` : ''}
+      `;
+
+      const dueBadge = due === 'overdue'
+        ? ` <span class="badge badge--warn">Atrasado</span>`
+        : (due === 'today' ? ` <span class="badge badge--warn">Hoy</span>` : '');
+
+      const history = Array.isArray(l.history) ? l.history : [];
+      const last = history.length ? history[history.length - 1] : null;
+      const ultimo = last
+        ? `<div class="tiny">${escapeHtml(String(last.note || '').slice(0, 90))}</div>
+           <div class="cellSub muted tiny">${escapeHtml(fmtDatePart_(last.at))}</div>`
+        : `<span class="muted tiny">Sin seguimientos</span>`;
+
+      const acciones = leadIsActive_(l)
+        ? `<button class="btn btn--tiny btn--ghost" data-lead-act="follow" data-id="${id}">Seguimiento</button>
+           <button class="btn btn--tiny btn--primary" data-lead-act="convert" data-id="${id}">Convertir en venta</button>
+           <button class="btn btn--tiny btn--ghost" data-lead-act="lost" data-id="${id}">No compró</button>
+           <button class="btn btn--tiny btn--ghost" data-lead-act="edit" data-id="${id}">Editar</button>`
+        : `<button class="btn btn--tiny btn--ghost" data-lead-act="reopen" data-id="${id}">Reabrir</button>
+           <button class="btn btn--tiny btn--ghost" data-lead-act="edit" data-id="${id}">Editar</button>`;
+
+      return `
+        <tr>
+          <td>${persona}</td>
+          <td>${interes}</td>
+          <td><span class="badge ${st_.cls}">${escapeHtml(st_.label)}</span></td>
+          <td class="tiny">${escapeHtml(fmtDateOnly_(l.next_contact_at))}${dueBadge}</td>
+          <td>${ultimo}</td>
+          <td class="num actionsCell">${acciones}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  /* -------- Modal interesado -------- */
+  function openLeadModal_(lead) {
+    const isNew = !lead;
+    if (el.leadTitle) el.leadTitle.textContent = isNew ? 'Nuevo interesado' : 'Editar interesado';
+
+    if (el.l_id) el.l_id.value = lead?.id || '';
+    if (el.l_name) el.l_name.value = lead?.name || '';
+    if (el.l_phone) el.l_phone.value = lead?.phone || '';
+    if (el.l_interest) el.l_interest.value = lead?.interest || '';
+    if (el.l_next_contact) el.l_next_contact.value = lead?.next_contact_at || (isNew ? addDaysISODate_(3) : '');
+    if (el.l_status) el.l_status.value = String(lead?.status || 'nuevo');
+    if (el.l_notes) el.l_notes.value = lead?.notes || '';
+
+    const p = lead?.product_id ? State.productsIndex().get(String(lead.product_id)) : null;
+    if (el.l_product_id) el.l_product_id.value = p ? String(lead.product_id) : '';
+    if (el.l_product_query) el.l_product_query.value = p ? buildProductOptionLabel_(p) : (lead?.product_name || '');
+
+    buildSaleDatalist_();
+
+    // Historial de seguimientos
+    const history = Array.isArray(lead?.history) ? lead.history : [];
+    if (el.l_historyWrap) el.l_historyWrap.hidden = !history.length;
+    if (el.l_historyBody) {
+      el.l_historyBody.innerHTML = history.slice().reverse().map(h => `
+        <tr>
+          <td class="tiny">${escapeHtml(fmtDateTime_(h.at))}</td>
+          <td class="tiny">${escapeHtml(h.note || '—')}</td>
+          <td class="tiny muted">${escapeHtml(h.by || '—')}</td>
+        </tr>
+      `).join('');
+    }
+
+    if (el.btnDeleteLead) el.btnDeleteLead.hidden = isNew;
+
+    el.modalLead?.showModal?.();
+    try { el.l_name?.focus?.({ preventScroll: true }); } catch {}
+  }
+
+  function readLeadForm_() {
+    // El campo de producto acepta texto libre: si no coincide con el catálogo,
+    // se guarda como descripción (así se puede registrar algo que aún no existe).
+    const raw = String(el.l_product_query?.value || '').trim();
+    const matched = parseProductIdFromInput_(raw) || String(el.l_product_id?.value || '').trim();
+    const stillValid = matched && State.productsIndex().has(matched);
+
+    return {
+      id: String(el.l_id?.value || '').trim(),
+      name: safeStr_(el.l_name?.value, 180),
+      phone: safeStr_(el.l_phone?.value, 40),
+      product_id: stillValid ? matched : '',
+      product_name: stillValid ? '' : safeStr_(raw, 220),
+      interest: safeStr_(el.l_interest?.value, 400),
+      next_contact_at: String(el.l_next_contact?.value || '').trim(),
+      status: String(el.l_status?.value || 'nuevo'),
+      notes: safeStr_(el.l_notes?.value, 2000),
+    };
+  }
+
+  async function saveLead_() {
+    const lead = readLeadForm_();
+    if (!lead.name) { toast('Falta el nombre de la persona', false); return; }
+
+    setBusy_(true, 'Guardando interesado…');
+    try {
+      await StoreAPI.upsertLead(lead, Roles.email());
+      toast(lead.id ? 'Interesado actualizado ✅' : 'Interesado agregado ✅', true);
+      el.modalLead?.close?.();
+      await refreshAfterLeadChange_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function deleteLead_() {
+    const id = String(el.l_id?.value || '').trim();
+    if (!id) return;
+    if (!confirm('¿Eliminar este interesado? No se puede deshacer.')) return;
+
+    setBusy_(true, 'Eliminando…');
+    try {
+      await StoreAPI.deleteLead(id);
+      toast('Interesado eliminado', true);
+      el.modalLead?.close?.();
+      await refreshAfterLeadChange_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  /* -------- Seguimiento -------- */
+  function openFollowUpModal_(leadId) {
+    const lead = (State.get().leads || []).find(l => String(l.id) === String(leadId));
+    if (!lead) { toast('No encontré ese interesado', false); return; }
+
+    if (el.fu_lead_id) el.fu_lead_id.value = lead.id;
+    if (el.fu_who) el.fu_who.textContent = `${lead.name || '—'}${lead.phone ? ' · ' + lead.phone : ''}`;
+    if (el.fu_note) el.fu_note.value = '';
+    if (el.fu_next) el.fu_next.value = addDaysISODate_(3);
+
+    el.modalFollowUp?.showModal?.();
+    try { el.fu_note?.focus?.({ preventScroll: true }); } catch {}
+  }
+
+  async function saveFollowUp_() {
+    const id = String(el.fu_lead_id?.value || '').trim();
+    if (!id) return;
+
+    const note = safeStr_(el.fu_note?.value, 1200);
+    if (!note) { toast('Escribe qué pasó en el contacto', false); return; }
+
+    setBusy_(true, 'Guardando seguimiento…');
+    try {
+      await StoreAPI.addLeadFollowUp(id, {
+        note,
+        nextContactAt: String(el.fu_next?.value || '').trim(),
+        by: Roles.email(),
+      });
+      toast('Seguimiento registrado ✅', true);
+      el.modalFollowUp?.close?.();
+      await refreshAfterLeadChange_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function markLeadLost_(leadId) {
+    const reason = prompt('¿Por qué no compró? (opcional)') ?? null;
+    if (reason === null) return; // canceló
+
+    setBusy_(true, 'Guardando…');
+    try {
+      await StoreAPI.setLeadStatus(leadId, 'perdido', { reason: safeStr_(reason, 400), by: Roles.email() });
+      toast('Marcado como “no compró”', true);
+      await refreshAfterLeadChange_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function reopenLead_(leadId) {
+    setBusy_(true, 'Guardando…');
+    try {
+      await StoreAPI.setLeadStatus(leadId, 'seguimiento', { by: Roles.email() });
+      toast('Interesado reabierto ✅', true);
+      await refreshAfterLeadChange_();
+    } catch (e) {
+      toast(e?.message || String(e), false);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  /* Convertir en venta: abre el carrito ya cargado y deja el enlace pendiente
+     para marcar al interesado como "compró" cuando la venta se guarde. */
+  async function convertLeadToSale_(leadId) {
+    const lead = (State.get().leads || []).find(l => String(l.id) === String(leadId));
+    if (!lead) { toast('No encontré ese interesado', false); return; }
+
+    await ensureProductsLoaded_().catch(() => {});
+
+    showTab('sales');
+    openNewSale_();
+
+    LEAD_LINK.leadId = String(lead.id);
+
+    if (el.saleCustomer) el.saleCustomer.value = lead.name || '';
+    if (el.saleNotes) {
+      const extra = [lead.phone ? `Tel: ${lead.phone}` : '', lead.interest || ''].filter(Boolean).join(' · ');
+      el.saleNotes.value = extra ? `Interesado: ${extra}` : '';
+    }
+
+    const p = lead.product_id ? State.productsIndex().get(String(lead.product_id)) : null;
+    if (p) {
+      State.setSaleItems([{
+        product_id: String(p.id),
+        name: p.name || String(p.id),
+        qty: 1,
+        unit_price: pickPriceCOP_(p),
+      }]);
+      scheduleSaleRender_();
+      toast('Carrito listo con el producto de interés 🛒', true);
+    } else {
+      toast(lead.product_name
+        ? `Buscaba: ${lead.product_name}. Agrégalo al carrito.`
+        : 'Agrega los productos al carrito.', true);
+    }
+  }
+
+  /* Se llama tras guardar una venta que venía de un interesado.
+     El id llega por parámetro porque closeSale_() ya limpió el enlace. */
+  async function closeLeadAfterSale_(saleId, leadId) {
+    if (!leadId) return;
+
+    try {
+      await StoreAPI.setLeadStatus(leadId, 'ganado', { saleId: String(saleId || ''), by: Roles.email() });
+      await ensureLeadsLoaded_(true).catch(() => {});
+      renderLeadsBadge_();
+      toast('Interesado marcado como “compró” 🎉', true);
+    } catch (e) {
+      // La venta ya quedó guardada: esto no debe romper el flujo.
+      console.warn('[leads] no pude cerrar el interesado:', e);
+      toast('Venta guardada, pero no pude marcar al interesado. Ciérralo a mano.', false);
+    }
   }
 
   /* =========================

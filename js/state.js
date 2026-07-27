@@ -25,6 +25,7 @@ const CACHE_KEYS = Object.freeze([
   'dashboard',
   'sales',
   'orders',
+  'leads',
   'lastSync',
   'restock',
 ]);
@@ -157,6 +158,7 @@ const DEFAULT_STATE = Object.freeze({
   inventory: [],
   sales: [],
   orders: [],
+  leads: [],
   dashboard: null,
 
   // ui
@@ -314,6 +316,7 @@ function loadCache_() {
     inventory: safeArray(data.inventory),
     sales: safeArray(data.sales),
     orders: safeArray(data.orders),
+    leads: safeArray(data.leads),
     dashboard: data.dashboard || null,
     lastSync: data.lastSync || null,
     restock: normalizeRestock_(data.restock),
@@ -379,6 +382,7 @@ function attachCrossTabSync_() {
         inventory: cached.inventory || [],
         sales: cached.sales || [],
         orders: cached.orders || [],
+        leads: cached.leads || [],
         dashboard: cached.dashboard || null,
         lastSync: cached.lastSync || null,
         restock: cached.restock || normalizeRestock_(null),
@@ -511,6 +515,7 @@ export const State = {
   setInventory(items) { this.set({ inventory: safeArray(items) }, { data: true }); },
   setSales(items) { this.set({ sales: safeArray(items) }, { data: true }); },
   setOrders(items) { this.set({ orders: safeArray(items) }, { data: true }); },
+  setLeads(items) { this.set({ leads: safeArray(items) }, { data: true }); },
   setDashboard(dashboard) { this.set({ dashboard: dashboard || null }, { data: true }); },
   setLastSync(iso = nowISO()) { this.set({ lastSync: String(iso || nowISO()) }, { data: true }); },
 
@@ -746,6 +751,7 @@ export const State = {
       inventory: cached.inventory || [],
       sales: cached.sales || [],
       orders: cached.orders || [],
+      leads: cached.leads || [],
       dashboard: cached.dashboard || null,
       lastSync: cached.lastSync || null,
       restock: cached.restock || normalizeRestock_(null),

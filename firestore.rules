@@ -85,6 +85,12 @@ service cloud.firestore {
       allow read, write: if isStaff();
     }
 
+    /* Interesados: personas que preguntaron pero aún no compran. Es trabajo
+       diario de las asesoras, así que acceso completo para el equipo. */
+    match /leads/{leadId} {
+      allow read, write: if isStaff();
+    }
+
     /* Todo lo demás: cerrado. */
     match /{document=**} {
       allow read, write: if false;

@@ -1,6 +1,6 @@
 'use strict';
 
-export const BUILD_VERSION = '2026-07-24.2';
+export const BUILD_VERSION = '2026-07-27.1';
 
 export const CURRENCY = 'COP';
 export const LOCALE = 'es-CO';

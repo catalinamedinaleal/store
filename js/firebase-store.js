@@ -341,5 +341,87 @@ export const StoreAPI = {
     });
     return { ok: true };
   },
+  /* =========================
+     Interesados (leads)
+     -------------------------
+     Gente que preguntó por algo y todavía no compra. Se les hace seguimiento
+     hasta que se convierte en venta (o se marca como perdido).
+  ========================= */
+  async listLeads(limit = 500) {
+    const items = await all_('leads', 'updated_at');
+    return { ok: true, items: items.map(x => ({ ...x, created_at: iso(x.created_at), updated_at: iso(x.updated_at) })).slice(0, limit) };
+  },
+
+  async upsertLead(lead = {}, updatedBy = '') {
+    const f = await sdk_(); const db = getFirestoreDb();
+    const leadId = s(lead.id) || id('lead');
+    const ref = f.doc(db, 'leads', leadId);
+    const previous = await f.getDoc(ref);
+
+    const data = {
+      id: leadId,
+      name: s(lead.name),
+      phone: s(lead.phone),
+      interest: s(lead.interest),
+      product_id: s(lead.product_id),
+      product_name: s(lead.product_name),
+      status: ['nuevo', 'seguimiento', 'ganado', 'perdido'].includes(s(lead.status)) ? s(lead.status) : 'nuevo',
+      next_contact_at: s(lead.next_contact_at),
+      notes: s(lead.notes),
+      updated_at: f.serverTimestamp(),
+      updated_by: s(updatedBy),
+    };
+
+    if (!previous.exists()) {
+      data.created_at = f.serverTimestamp();
+      data.created_by = s(updatedBy);
+      data.history = [];
+    }
+
+    await f.setDoc(ref, data, { merge: true });
+    return { ok: true, mode: previous.exists() ? 'updated' : 'created', id: leadId };
+  },
+
+  /* Registra un contacto y reprograma el siguiente. */
+  async addLeadFollowUp(leadId, { note = '', nextContactAt = '', by = '' } = {}) {
+    const f = await sdk_(); const db = getFirestoreDb();
+    const ref = f.doc(db, 'leads', s(leadId));
+
+    await f.runTransaction(db, async tx => {
+      const snap = await tx.get(ref);
+      const lead = snap.data();
+      if (!lead) throw new Error('Interesado no encontrado');
+
+      const history = [...(lead.history || []), { at: new Date().toISOString(), note: s(note), by: s(by) }];
+      tx.update(ref, {
+        history,
+        next_contact_at: s(nextContactAt),
+        status: lead.status === 'nuevo' ? 'seguimiento' : lead.status,
+        updated_at: f.serverTimestamp(),
+        updated_by: s(by),
+      });
+    });
+
+    return { ok: true };
+  },
+
+  async setLeadStatus(leadId, status, extra = {}) {
+    const f = await sdk_();
+    const next = ['nuevo', 'seguimiento', 'ganado', 'perdido'].includes(s(status)) ? s(status) : 'seguimiento';
+    const data = { status: next, updated_at: f.serverTimestamp(), updated_by: s(extra.by) };
+
+    if (next === 'ganado') { data.sale_id = s(extra.saleId); data.next_contact_at = ''; }
+    if (next === 'perdido') { data.lost_reason = s(extra.reason); data.next_contact_at = ''; }
+
+    await f.updateDoc(f.doc(getFirestoreDb(), 'leads', s(leadId)), data);
+    return { ok: true, status: next };
+  },
+
+  async deleteLead(leadId) {
+    const f = await sdk_();
+    await f.deleteDoc(f.doc(getFirestoreDb(), 'leads', s(leadId)));
+    return { ok: true };
+  },
+
   async dashboard() { const [products,inventory,sales]=await Promise.all([all_('products'),all_('inventory'),all_('sales','created_at')]); const paid=sales.filter(x=>x.status==='paid'); const today=new Date().toISOString().slice(0,10); return {ok:true,products_count:products.length,low_stock:inventory.filter(x=>n(x.stock)<=n(x.min_stock)),today_total_cop:paid.filter(x=>iso(x.created_at).slice(0,10)===today).reduce((a,x)=>a+n(x.total_cop),0),total_cop:paid.reduce((a,x)=>a+n(x.total_cop),0),sales_count:paid.length}; },
 };
