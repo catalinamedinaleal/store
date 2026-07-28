@@ -844,6 +844,110 @@ th[data-sort-active="true"] .thSortIcon{
 }
 
 /* =========================
+   Cotizador admin
+========================= */
+.quoteModal__card{
+  width:min(1180px, calc(100vw - 28px));
+  max-width:1180px;
+  max-height:96vh;
+  margin:2vh auto;
+  overflow-x:hidden;
+  overflow-y:auto;
+}
+.quoteGrid{
+  display:grid;
+  grid-template-columns:minmax(320px, .85fr) minmax(420px, 1.15fr);
+  gap:16px;
+  margin-top:14px;
+}
+.quotePanel{
+  min-width:0;
+  border:1px solid rgba(11,16,32,.10);
+  border-radius:14px;
+  background:rgba(255,255,255,.72);
+  padding:14px;
+}
+.quotePanel__head{
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+}
+.quoteOrdersWrap{
+  max-height:360px;
+  margin-top:10px;
+}
+.quoteOrdersTable{ min-width:620px; }
+.quoteItemsTable{ min-width:560px; }
+.quoteCheck{
+  width:40px;
+  text-align:center;
+}
+.quoteCheck input{
+  width:18px;
+  height:18px;
+  accent-color:var(--a1);
+}
+.quoteDiscountInput{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.quoteDiscountInput .input{
+  flex:1;
+  min-width:0;
+}
+.quoteDiscountInput > span{ font-weight:800; }
+.quoteTotals{
+  display:grid;
+  gap:7px;
+  margin-top:14px;
+  border-top:1px solid rgba(11,16,32,.10);
+  padding-top:12px;
+}
+.quoteTotals > div{
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+}
+.quoteTotals__grand{
+  font-size:1.08rem;
+  color:var(--text);
+  border-top:1px dashed rgba(11,16,32,.16);
+  padding-top:8px;
+}
+.quotePreview{
+  margin-top:14px;
+  padding:14px;
+  min-height:104px;
+  border-radius:12px;
+  background:#fffaf1;
+  border:1px solid rgba(176,138,84,.32);
+  white-space:pre-wrap;
+  line-height:1.5;
+  font-size:.9rem;
+}
+.quoteActions{
+  align-items:center;
+  flex-wrap:wrap;
+}
+.quoteActions__hint{
+  margin-right:auto;
+  max-width:520px;
+}
+@media (max-width:900px){
+  .quoteGrid{ grid-template-columns:1fr; }
+  .quoteOrdersWrap{ max-height:300px; }
+}
+@media (max-width:600px){
+  .quoteModal__card{
+    width:calc(100vw - 12px);
+    margin:1vh auto;
+  }
+  .quotePanel{ padding:10px; }
+  .quoteActions > .btn{ flex:1 1 100%; }
+}
+
+/* =========================
    Dashboard grid
 ========================= */
 .dash{
@@ -992,6 +1096,20 @@ th[data-sort-active="true"] .thSortIcon{
   .card__actions .input--sm{ flex: 1 1 240px; min-width: 0; }
   .pill{ padding: 8px 10px; }
 }
+
+/* El bloque de refinamiento general define tamaños globales después de los
+   componentes. Estas reglas específicas preservan el ancho útil del cotizador. */
+.modal__card.quoteModal__card{
+  width:min(1180px, calc(100vw - 28px));
+  max-width:1180px;
+  max-height:96vh;
+  margin:2vh auto;
+  overflow-x:hidden;
+  overflow-y:auto;
+}
+.table.quoteOrdersTable{ min-width:620px; }
+.table.quoteItemsTable{ min-width:560px; }
+
 /* =========================
    Musicala Store refinement
 ========================= */

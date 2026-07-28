@@ -57,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-07-27.1";
+    window.__BUILD__ = "2026-07-27.2";
   </script>
 
   <!--
@@ -253,6 +253,11 @@
       <button class="btn btn--ghost" id="btnPricingRules" type="button"
         title="Reglas de precio de venta" data-role="admin" hidden>
         ⚙️ Precios
+      </button>
+
+      <button class="btn btn--primary" id="btnQuoteOpen" type="button"
+        title="Combinar pedidos y preparar una cotización" data-role="admin" hidden>
+        ✨ Cotizador
       </button>
 
       <div class="pill" id="userPill" hidden>
@@ -505,6 +510,7 @@
                 <tr>
                   <th>Fecha</th>
                   <th>Cliente</th>
+                  <th data-role="admin" hidden>Guardó</th>
                   <th class="num">Total</th>
                   <th>Notas</th>
                   <th class="num">Acciones</th>
@@ -1240,6 +1246,104 @@
     </form>
   </dialog>
 
+  <!-- Modal: Cotizador (solo admin) -->
+  <dialog class="modal quoteModal" id="modalQuote" aria-label="Cotizador" data-role="admin" hidden>
+    <div class="modal__card quoteModal__card">
+      <div class="modal__head">
+        <div>
+          <h3 class="h3">Cotizador</h3>
+          <p class="muted tiny">Combina los carritos pendientes del equipo, aplica un descuento seguro y prepara la información para IA.</p>
+        </div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalQuote">Cerrar</button>
+      </div>
+
+      <div class="quoteGrid">
+        <section class="quotePanel">
+          <div class="row quotePanel__head">
+            <div>
+              <h4 class="h3">1. Carritos guardados</h4>
+              <p class="tiny muted" id="quoteOrdersMeta">Cargando pedidos compartidos…</p>
+            </div>
+            <button class="btn btn--ghost" id="btnQuoteRefresh" type="button">Actualizar</button>
+          </div>
+
+          <div class="tablewrap quoteOrdersWrap">
+            <table class="table table--compact quoteOrdersTable" aria-label="Carritos pendientes para cotizar">
+              <thead>
+                <tr>
+                  <th class="quoteCheck"><span class="sr-only">Seleccionar</span></th>
+                  <th>Fecha</th>
+                  <th>Cliente</th>
+                  <th>Guardó</th>
+                  <th class="num">Total</th>
+                </tr>
+              </thead>
+              <tbody id="quoteOrdersBody">
+                <tr><td colspan="5" class="muted">Cargando…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="quotePanel">
+          <h4 class="h3">2. Cotización combinada</h4>
+
+          <div class="grid2" style="margin-top:10px;">
+            <label class="field">
+              <span class="label">Cliente</span>
+              <input class="input" id="quoteCustomer" type="text" placeholder="Nombre de la persona o empresa" />
+            </label>
+            <label class="field">
+              <span class="label">Descuento</span>
+              <div class="quoteDiscountInput">
+                <input class="input" id="quoteDiscount" type="number" min="0" max="0" step="0.1" value="0" inputmode="decimal" />
+                <span>%</span>
+              </div>
+              <span class="tiny muted" id="quoteDiscountHelp">Selecciona al menos un carrito.</span>
+            </label>
+          </div>
+
+          <div class="tablewrap" style="margin-top:12px;">
+            <table class="table table--compact quoteItemsTable" aria-label="Productos consolidados de la cotización">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th class="num">Cant.</th>
+                  <th class="num">Precio</th>
+                  <th class="num">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody id="quoteItemsBody">
+                <tr><td colspan="4" class="muted">Selecciona uno o varios carritos.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <label class="field" style="margin-top:12px;">
+            <span class="label">Notas para la cotización</span>
+            <textarea class="input" id="quoteNotes" rows="2" placeholder="Vigencia, entrega, forma de pago u observaciones…"></textarea>
+          </label>
+
+          <div class="quoteTotals" aria-live="polite">
+            <div><span>Subtotal</span><strong class="mono" id="quoteSubtotal">$0</strong></div>
+            <div><span>Descuento</span><strong class="mono" id="quoteDiscountAmount">− $0</strong></div>
+            <div class="quoteTotals__grand"><span>Total cotizado</span><strong class="mono" id="quoteTotal">$0</strong></div>
+          </div>
+
+          <div class="quotePreview" id="quotePreview" aria-label="Vista previa de la cotización">
+            Selecciona carritos para preparar la cotización.
+          </div>
+        </section>
+      </div>
+
+      <div class="modal__foot quoteActions">
+        <span class="tiny muted quoteActions__hint">La IA recibe únicamente el texto que copies; no se comparten costos ni márgenes.</span>
+        <button class="btn btn--ghost" id="btnQuoteCopy" type="button">Copiar cotización</button>
+        <button class="btn btn--primary" id="btnQuoteAI" type="button">Copiar y abrir IA ✨</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Modal: Detalle de venta -->
   <dialog class="modal" id="modalSaleDetail" aria-label="Detalle de venta">
     <form method="dialog" class="modal__card" id="saleDetailForm">
@@ -1322,6 +1426,4 @@
   </script>
 </body>
 </html>
-
-
 

@@ -13,6 +13,7 @@ Manager interno de catálogo, inventario y ventas. Sitio estático (HTML + JS mo
 | Dashboard y cifras de venta | ✅ | ❌ |
 | Precio de competencia | ✅ | ❌ |
 | Editar la regla de precios | ✅ | ❌ |
+| Cotizador: combinar carritos y calcular descuento seguro | ✅ | ❌ |
 
 Los correos de cada rol están en [`js/config.js`](js/config.js) y **deben coincidir** con
 [`firestore.rules`](firestore.rules). La interfaz obedece a `config.js`; quien aplica la
@@ -39,6 +40,17 @@ están atrasados, y ordena la lista poniendo primero lo vencido.
 
 *Convertir en venta* abre el carrito con la persona y el producto ya cargados;
 al guardar la venta, el interesado queda marcado como "compró" y enlazado a ella.
+
+## Cotizador admin
+
+Los pedidos pendientes se guardan en Firestore con el correo de quien los creó. El
+admin puede abrir **✨ Cotizador**, seleccionar varios carritos y consolidar sus
+productos sin alterar los pedidos originales.
+
+El descuento máximo se calcula con el producto de menor margen para que ninguna
+línea quede por debajo del costo. Si falta el costo de algún producto, el descuento
+se bloquea hasta completar ese dato. La salida para IA incluye solamente información
+comercial; nunca copia costos ni márgenes internos.
 
 ## Dónde viven los datos
 

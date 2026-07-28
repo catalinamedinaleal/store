@@ -261,6 +261,24 @@ export function boot() {
     ordersPane: $('ordersPane'),
     ordersFilter: $('ordersFilter'),
 
+    // cotizador admin
+    btnQuoteOpen: $('btnQuoteOpen'),
+    modalQuote: $('modalQuote'),
+    btnQuoteRefresh: $('btnQuoteRefresh'),
+    quoteOrdersBody: $('quoteOrdersBody'),
+    quoteOrdersMeta: $('quoteOrdersMeta'),
+    quoteCustomer: $('quoteCustomer'),
+    quoteDiscount: $('quoteDiscount'),
+    quoteDiscountHelp: $('quoteDiscountHelp'),
+    quoteItemsBody: $('quoteItemsBody'),
+    quoteNotes: $('quoteNotes'),
+    quoteSubtotal: $('quoteSubtotal'),
+    quoteDiscountAmount: $('quoteDiscountAmount'),
+    quoteTotal: $('quoteTotal'),
+    quotePreview: $('quotePreview'),
+    btnQuoteCopy: $('btnQuoteCopy'),
+    btnQuoteAI: $('btnQuoteAI'),
+
     // sale detail modal
     modalSaleDetail: $('modalSaleDetail'),
     sd_id: $('sd_id'),
@@ -702,7 +720,7 @@ export function boot() {
     if (p.action === 'sales.list') return StoreAPI.listSales(p.status, p.include_items, p.limit);
     if (p.action === 'sale.get') return StoreAPI.getSale(p.id);
     if (p.action === 'sale.create') return StoreAPI.createSale({ sale: p.sale, items: p.items });
-    if (p.action === 'sale.updateStatus') return StoreAPI.updateSaleStatus(p.id, p.status);
+    if (p.action === 'sale.updateStatus') return StoreAPI.updateSaleStatus(p.id, p.status, Roles.email());
     throw new Error(`Acción Firebase no soportada: ${p.action || ''}`);
   }
 
@@ -924,7 +942,9 @@ export function boot() {
   ========================= */
   async function loadOrders_() {
     try {
-      const res = await StoreAPI.listSales('all', false, 500);
+      // El detalle viaja en esta lectura para que el cotizador pueda combinar
+      // varios carritos sin hacer una consulta adicional por cada uno.
+      const res = await StoreAPI.listSales('all', true, 500);
       const items = (res.items || []).filter(x => normStatus_(x.status) !== 'cancelled');
 
       const orders = items.map(x => ({
@@ -938,17 +958,28 @@ export function boot() {
         paid_cop: toInt(x.paid_cop),
         balance_cop: toInt(x.balance_cop),
         posted: !!x.posted,
+        created_by: String(x.created_by || x.updated_by || '').trim(),
         source: 'api',
-        items: null,
+        items: Array.isArray(x.items) ? x.items.map(it => ({
+          product_id: String(it.product_id || '').trim(),
+          qty: Math.max(0, toInt(it.qty)),
+          unit_price: Math.max(0, toInt(it.unit_price)),
+          subtotal: Math.max(0, toInt(it.subtotal)),
+        })).filter(it => it.product_id && it.qty > 0) : [],
       })).filter(o => o.id);
 
       State.setOrders(orders);
-      State.set({ ordersSource: 'api', ordersHydrated: false }, { data: true });
+      State.set({ ordersSource: 'api', ordersHydrated: true, ordersLoadError: '' }, { data: true });
       return;
-    } catch {
+    } catch (e) {
+      console.error('[sales] No se pudieron cargar los pedidos compartidos:', e);
       const local = readLocalOrders_();
       State.setOrders(local);
-      State.set({ ordersSource: 'local', ordersHydrated: true }, { data: true });
+      State.set({
+        ordersSource: 'local',
+        ordersHydrated: true,
+        ordersLoadError: String(e?.message || e || 'Error de conexión'),
+      }, { data: true });
     }
   }
 
@@ -971,11 +1002,11 @@ export function boot() {
     });
 
     if (!rows.length) {
-      el.ordersBody.innerHTML = `<tr><td colspan="5" class="muted">No hay ventas en este filtro.</td></tr>`;
+      el.ordersBody.innerHTML = `<tr><td colspan="${Roles.isAdmin() ? 6 : 5}" class="muted">No hay ventas en este filtro.</td></tr>`;
       if (el.ordersMeta) {
-        el.ordersMeta.textContent = (st.ordersSource === 'api')
-          ? 'Fuente: servidor'
-          : 'Fuente: local (este dispositivo)';
+        el.ordersMeta.textContent = st.ordersLoadError
+          ? `⚠ No se pudo leer el servidor. Mostrando solo este dispositivo: ${st.ordersLoadError}`
+          : (st.ordersSource === 'api' ? 'Fuente: servidor compartido' : 'Fuente: local (este dispositivo)');
       }
       syncSalesUI_();
       return;
@@ -989,6 +1020,9 @@ export function boot() {
       const notes = String(o.notes || '').trim();
       const status = normStatus_(o.status);
       const isApi = st.ordersSource === 'api';
+      const actorCell = Roles.isAdmin()
+        ? `<td class="tiny">${escapeHtml(quoteActorLabel_(o))}</td>`
+        : '';
 
       const oid = escapeHtml(String(o.id || ''));
       const balance = toInt(o.balance_cop);
@@ -1019,6 +1053,7 @@ export function boot() {
             <div class="muted mono">${escapeHtml(fmtTimePart_(o.created_at))}</div>
           </td>
           <td>${escapeHtml(cust)}</td>
+          ${actorCell}
           <td class="num mono">${escapeHtml(total)}</td>
           <td class="tiny">${escapeHtml(notes)}${notes ? '<br>' : ''}${statusLine}</td>
           <td class="num" style="white-space:nowrap;">
@@ -1034,9 +1069,11 @@ export function boot() {
     }).join('');
 
     if (el.ordersMeta) {
-      el.ordersMeta.textContent = (st.ordersSource === 'api')
-        ? `Fuente: servidor · ${rows.length} venta(s) en este filtro`
-        : `Fuente: local (este dispositivo) · ${rows.length} pedido(s)`;
+      el.ordersMeta.textContent = st.ordersLoadError
+        ? `⚠ No se pudo leer el servidor. Mostrando solo este dispositivo: ${st.ordersLoadError}`
+        : (st.ordersSource === 'api'
+          ? `Fuente: servidor compartido · ${rows.length} venta(s) en este filtro`
+          : `Fuente: local (este dispositivo) · ${rows.length} pedido(s)`);
     }
 
     syncSalesUI_();
@@ -1187,11 +1224,7 @@ export function boot() {
   }
 
   async function ensureProductsLoaded_(force = false) {
-    const st = State.get();
-    const has = Array.isArray(st.products) && st.products.length > 0;
-
-    if (!force && has) {
-      // Productos desde caché: los datalists de búsqueda pueden estar vacíos aún
+    if (!force && LOAD.productsLoadedAt > 0) {
       if (el.saleProductsList && !el.saleProductsList.children.length) buildSaleDatalist_();
       if (el.inventoryProductsList && !el.inventoryProductsList.children.length) buildInventoryProductDatalist_();
       return;
@@ -1217,10 +1250,7 @@ export function boot() {
   }
 
   async function ensureInventoryLoaded_(force = false) {
-    const st = State.get();
-    const has = Array.isArray(st.inventory) && st.inventory.length > 0;
-
-    if (!force && has) return;
+    if (!force && LOAD.inventoryLoadedAt > 0) return;
     if (LOAD.inventoryInflight) return LOAD.inventoryInflight;
 
     LOAD.inventoryInflight = (async () => {
@@ -1234,10 +1264,7 @@ export function boot() {
   }
 
   async function ensureDashboardLoaded_(force = false) {
-    const st = State.get();
-    const has = !!st.dashboard;
-
-    if (!force && has) return;
+    if (!force && LOAD.dashboardLoadedAt > 0) return;
     if (LOAD.dashboardInflight) return LOAD.dashboardInflight;
 
     LOAD.dashboardInflight = (async () => {
@@ -1985,6 +2012,8 @@ export function boot() {
       status: normStatus_(String(el.saleStatus?.value || 'paid').trim()),
       notes: safeStr_(el.saleNotes?.value, 1200),
       initial_payment_cop: Math.max(0, toInt(el.saleInitialPayment?.value)),
+      created_by: Roles.email(),
+      updated_by: Roles.email(),
     };
 
     const computedTotal = items.reduce((acc, it) => acc + (toInt(it.qty) * toInt(it.unit_price)), 0);
@@ -2006,6 +2035,7 @@ export function boot() {
           payment_method: sale.payment_method || '',
           status: 'pending',
           notes: sale.notes || '',
+          created_by: Roles.email(),
           total_cop: computedTotal,
           items: saleItems.map(it => ({
             product_id: String(it.product_id || '').trim(),
@@ -2070,6 +2100,8 @@ export function boot() {
       status: 'paid',
       notes: String(o.notes || '').trim(),
       from_order: String(o.id || '').trim(),
+      created_by: Roles.email(),
+      updated_by: Roles.email(),
     };
 
     const computedTotal = items.reduce((acc, it) => acc + (toInt(it.qty) * toInt(it.unit_price)), 0);
@@ -2098,6 +2130,319 @@ export function boot() {
     try { await StoreAPI.addPayment(id, amount, order?.payment_method || 'cash'); toast('Abono registrado ✅', true); await refreshAfterOrderPaid_(); }
     catch (e) { toast(e?.message || String(e), false); }
     finally { setBusy_(false); }
+  }
+
+  /* =========================
+     Cotizador admin
+     - combina varios carritos pendientes del servidor
+     - limita el descuento para no vender ningún producto por debajo del costo
+     - copia una salida comercial sin exponer costos ni márgenes
+  ========================= */
+  const QUOTE = {
+    selected: new Set(),
+    items: [],
+    maxDiscountPct: 0,
+    missingCosts: [],
+  };
+
+  function quoteOrders_() {
+    return (Array.isArray(State.get().orders) ? State.get().orders : [])
+      .filter(o => normStatus_(o.status) === 'pending' && Array.isArray(o.items) && o.items.length > 0)
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  }
+
+  function quoteActorLabel_(order) {
+    const email = String(order?.created_by || '').trim();
+    if (!email) return 'Sin registro';
+    return email.split('@')[0] || email;
+  }
+
+  function quoteSelectedOrders_() {
+    const selected = QUOTE.selected;
+    return quoteOrders_().filter(o => selected.has(String(o.id || '')));
+  }
+
+  function combineQuoteItems_() {
+    const products = State.productsIndex();
+    const grouped = new Map();
+
+    for (const order of quoteSelectedOrders_()) {
+      for (const row of (order.items || [])) {
+        const pid = String(row.product_id || '').trim();
+        const qty = Math.max(0, toInt(row.qty));
+        const unit = Math.max(0, toInt(row.unit_price));
+        if (!pid || !qty) continue;
+
+        // Si un mismo producto fue guardado con precios distintos, conserva
+        // líneas separadas para no alterar el valor de ningún carrito.
+        const key = `${pid}::${unit}`;
+        const p = products.get(pid);
+        const current = grouped.get(key) || {
+          product_id: pid,
+          name: String(p?.name || pid),
+          qty: 0,
+          unit_price: unit,
+          cost_cop: costFor_(pid),
+          has_cost: COSTS.map.has(pid) && costFor_(pid) > 0,
+        };
+        current.qty += qty;
+        grouped.set(key, current);
+      }
+    }
+
+    return Array.from(grouped.values())
+      .map(it => ({ ...it, subtotal: it.qty * it.unit_price }))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
+  }
+
+  function quoteDiscountLimit_(items) {
+    if (!items.length) return { max: 0, missing: [] };
+
+    const missing = items.filter(it => !it.has_cost || it.unit_price <= 0);
+    if (missing.length) {
+      return { max: 0, missing: missing.map(it => it.name || it.product_id) };
+    }
+
+    const limits = items.map(it => {
+      const raw = ((it.unit_price - it.cost_cop) / it.unit_price) * 100;
+      return Math.max(0, Math.floor(raw * 10) / 10);
+    });
+    return { max: Math.min(...limits), missing: [] };
+  }
+
+  function quoteDiscountPct_() {
+    const raw = Number(String(el.quoteDiscount?.value || '0').replace(',', '.'));
+    const requested = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+    return Math.min(QUOTE.maxDiscountPct, Math.round(requested * 10) / 10);
+  }
+
+  function quoteTotals_() {
+    const subtotal = QUOTE.items.reduce((sum, it) => sum + Math.max(0, toInt(it.subtotal)), 0);
+    const discountPct = quoteDiscountPct_();
+    const discount = Math.floor(subtotal * (discountPct / 100));
+    return {
+      subtotal,
+      discountPct,
+      discount,
+      total: Math.max(0, subtotal - discount),
+    };
+  }
+
+  function quotePlainText_() {
+    const selected = quoteSelectedOrders_();
+    const totals = quoteTotals_();
+    if (!QUOTE.items.length) return '';
+
+    const customer = String(el.quoteCustomer?.value || '').trim() || 'Cliente';
+    const notes = String(el.quoteNotes?.value || '').trim();
+    const date = new Intl.DateTimeFormat('es-CO', {
+      day: '2-digit', month: 'long', year: 'numeric',
+    }).format(new Date());
+
+    const lines = [
+      'COTIZACIÓN · MUSICALA STORE',
+      `Cliente: ${customer}`,
+      `Fecha: ${date}`,
+      '',
+      'PRODUCTOS',
+      ...QUOTE.items.map(it =>
+        `• ${it.qty} × ${it.name} — ${fmtCOP(it.unit_price)} c/u — ${fmtCOP(it.subtotal)}`
+      ),
+      '',
+      `Subtotal: ${fmtCOP(totals.subtotal)}`,
+    ];
+
+    if (totals.discountPct > 0) {
+      lines.push(`Descuento (${String(totals.discountPct).replace('.', ',')}%): -${fmtCOP(totals.discount)}`);
+    }
+    lines.push(`TOTAL: ${fmtCOP(totals.total)}`);
+    if (notes) lines.push('', `Observaciones: ${notes}`);
+    lines.push('', `Consolidado de ${selected.length} carrito(s) guardado(s).`);
+    return lines.join('\n');
+  }
+
+  function quoteAiPrompt_() {
+    const quote = quotePlainText_();
+    if (!quote) return '';
+    return [
+      'Crea una cotización comercial bonita y profesional para Musicala Store usando exactamente la información de abajo.',
+      'Entrégala en español, lista para copiar a un documento o exportar a PDF.',
+      'Usa una jerarquía visual clara, tabla de productos y un cierre amable.',
+      'No inventes productos, precios, descuentos, impuestos, fechas, condiciones ni datos de contacto.',
+      'No menciones costos internos, márgenes ni el número de carritos de origen.',
+      '',
+      quote,
+    ].join('\n');
+  }
+
+  async function copyText_(text) {
+    if (!text) throw new Error('Selecciona al menos un carrito para cotizar.');
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) throw new Error('No pude copiar el texto.');
+  }
+
+  function renderQuoteOrders_() {
+    if (!el.quoteOrdersBody) return;
+    const orders = quoteOrders_();
+    const st = State.get();
+
+    if (st.ordersSource !== 'api') {
+      el.quoteOrdersBody.innerHTML = '<tr><td colspan="5" class="muted">No hay conexión con los pedidos compartidos.</td></tr>';
+      if (el.quoteOrdersMeta) {
+        el.quoteOrdersMeta.textContent = `⚠ Revisa la conexión: ${st.ordersLoadError || 'solo hay datos locales'}`;
+      }
+      return;
+    }
+
+    if (!orders.length) {
+      el.quoteOrdersBody.innerHTML = '<tr><td colspan="5" class="muted">No hay carritos pendientes con productos.</td></tr>';
+      if (el.quoteOrdersMeta) el.quoteOrdersMeta.textContent = 'Fuente: servidor compartido · 0 carritos pendientes';
+      return;
+    }
+
+    el.quoteOrdersBody.innerHTML = orders.map(order => {
+      const oid = String(order.id || '');
+      const checked = QUOTE.selected.has(oid) ? ' checked' : '';
+      return `
+        <tr>
+          <td class="quoteCheck">
+            <input type="checkbox" data-quote-order="${escapeHtml(oid)}"${checked}
+              aria-label="Incluir carrito de ${escapeHtml(order.customer_id || 'cliente sin nombre')}" />
+          </td>
+          <td class="tiny">${escapeHtml(fmtDatePart_(order.created_at))}<br><span class="muted mono">${escapeHtml(fmtTimePart_(order.created_at))}</span></td>
+          <td>${escapeHtml(order.customer_id || '—')}</td>
+          <td class="tiny">${escapeHtml(quoteActorLabel_(order))}</td>
+          <td class="num mono">${escapeHtml(fmtCOP(toInt(order.total_cop)))}</td>
+        </tr>
+      `;
+    }).join('');
+
+    if (el.quoteOrdersMeta) {
+      el.quoteOrdersMeta.textContent = `Fuente: servidor compartido · ${orders.length} carrito(s) pendiente(s)`;
+    }
+  }
+
+  function renderQuote_() {
+    QUOTE.items = combineQuoteItems_();
+    const limit = quoteDiscountLimit_(QUOTE.items);
+    QUOTE.maxDiscountPct = limit.max;
+    QUOTE.missingCosts = limit.missing;
+
+    if (el.quoteDiscount) {
+      el.quoteDiscount.max = String(QUOTE.maxDiscountPct);
+      const current = quoteDiscountPct_();
+      el.quoteDiscount.value = String(current);
+    }
+
+    if (el.quoteDiscountHelp) {
+      if (!QUOTE.items.length) {
+        el.quoteDiscountHelp.textContent = 'Selecciona al menos un carrito.';
+      } else if (QUOTE.missingCosts.length) {
+        el.quoteDiscountHelp.textContent = `Descuento bloqueado: falta costo en ${QUOTE.missingCosts.join(', ')}.`;
+      } else {
+        el.quoteDiscountHelp.textContent = `Máximo seguro: ${String(QUOTE.maxDiscountPct).replace('.', ',')}% sin vender ningún producto por debajo del costo.`;
+      }
+    }
+
+    if (el.quoteItemsBody) {
+      el.quoteItemsBody.innerHTML = QUOTE.items.length
+        ? QUOTE.items.map(it => `
+          <tr>
+            <td>${escapeHtml(it.name || it.product_id)}</td>
+            <td class="num mono">${it.qty}</td>
+            <td class="num mono">${escapeHtml(fmtCOP(it.unit_price))}</td>
+            <td class="num mono">${escapeHtml(fmtCOP(it.subtotal))}</td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="4" class="muted">Selecciona uno o varios carritos.</td></tr>';
+    }
+
+    const totals = quoteTotals_();
+    if (el.quoteSubtotal) el.quoteSubtotal.textContent = fmtCOP(totals.subtotal);
+    if (el.quoteDiscountAmount) el.quoteDiscountAmount.textContent = `− ${fmtCOP(totals.discount)}`;
+    if (el.quoteTotal) el.quoteTotal.textContent = fmtCOP(totals.total);
+    if (el.quotePreview) {
+      el.quotePreview.textContent = quotePlainText_() || 'Selecciona carritos para preparar la cotización.';
+    }
+  }
+
+  function syncQuoteCustomer_() {
+    const selected = quoteSelectedOrders_();
+    if (selected.length === 1 && el.quoteCustomer && !String(el.quoteCustomer.value || '').trim()) {
+      el.quoteCustomer.value = String(selected[0].customer_id || '').trim();
+    }
+  }
+
+  async function openQuote_() {
+    if (!Roles.isAdmin()) {
+      toast('El cotizador con descuentos está disponible para admin.', false);
+      return;
+    }
+
+    setBusy_(true, 'Cargando carritos compartidos…');
+    try {
+      await Promise.all([
+        ensureOrdersLoaded_(true),
+        ensureProductsLoaded_(true),
+        ensureCostsLoaded_(true),
+      ]);
+      QUOTE.selected.clear();
+      QUOTE.items = [];
+      if (el.quoteCustomer) el.quoteCustomer.value = '';
+      if (el.quoteDiscount) el.quoteDiscount.value = '0';
+      if (el.quoteNotes) el.quoteNotes.value = '';
+      renderQuoteOrders_();
+      renderQuote_();
+      el.modalQuote?.showModal?.();
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function refreshQuote_() {
+    setBusy_(true, 'Actualizando carritos…');
+    try {
+      await Promise.all([ensureOrdersLoaded_(true), ensureProductsLoaded_(true), ensureCostsLoaded_(true)]);
+      const liveIds = new Set(quoteOrders_().map(o => String(o.id || '')));
+      QUOTE.selected = new Set(Array.from(QUOTE.selected).filter(id => liveIds.has(id)));
+      renderQuoteOrders_();
+      renderQuote_();
+      toast('Carritos actualizados ✅', true);
+    } finally {
+      setBusy_(false);
+    }
+  }
+
+  async function copyQuote_(forAi = false) {
+    const text = forAi ? quoteAiPrompt_() : quotePlainText_();
+    let aiTab = null;
+    if (forAi) aiTab = window.open('https://chatgpt.com/', '_blank', 'noopener,noreferrer');
+
+    try {
+      await copyText_(text);
+      toast(forAi
+        ? 'Información copiada ✅ Pégala en la IA para generar la cotización.'
+        : 'Cotización copiada ✅', true);
+      if (forAi && !aiTab) {
+        toast('Información copiada. El navegador bloqueó la pestaña; abre tu IA y pega el texto.', false);
+      }
+    } catch (e) {
+      try { aiTab?.close?.(); } catch {}
+      toast(e?.message || String(e), false);
+    }
   }
 
   /* =========================
@@ -3030,6 +3375,28 @@ export function boot() {
     on(el.btnAddToSale, 'click', () => addToSale_());
     on(el.btnSaveSale, 'click', async () => { try { await saveSale_(); } catch {} });
     on(el.saleStatus, 'change', syncInstallmentFields_);
+    on(el.btnQuoteOpen, 'click', async () => {
+      try { await openQuote_(); }
+      catch (e) { toast(e?.message || String(e), false); }
+    });
+    on(el.btnQuoteRefresh, 'click', async () => {
+      try { await refreshQuote_(); }
+      catch (e) { toast(e?.message || String(e), false); }
+    });
+    on(el.quoteOrdersBody, 'change', (ev) => {
+      const input = ev.target?.closest?.('[data-quote-order]');
+      if (!input) return;
+      const id = String(input.dataset.quoteOrder || '');
+      if (input.checked) QUOTE.selected.add(id);
+      else QUOTE.selected.delete(id);
+      syncQuoteCustomer_();
+      renderQuote_();
+    });
+    on(el.quoteDiscount, 'input', () => renderQuote_());
+    on(el.quoteCustomer, 'input', debounce(() => renderQuote_(), 80));
+    on(el.quoteNotes, 'input', debounce(() => renderQuote_(), 80));
+    on(el.btnQuoteCopy, 'click', async () => { await copyQuote_(false); });
+    on(el.btnQuoteAI, 'click', async () => { await copyQuote_(true); });
     on(el.btnSaveProduct, 'click', async () => { try { await saveProduct_(); } catch {} });
     on(el.btnSaveStock, 'click', async () => { try { await saveStock_(); } catch {} });
     on(el.btnSaveInventoryMeta, 'click', async () => { try { await saveInventoryMeta_(); } catch {} });
@@ -3435,10 +3802,9 @@ export function boot() {
   }
 
   async function ensureLeadsLoaded_(force = false) {
-    // Igual que el catálogo: si ya hay datos (caché local), pintamos de una y
-    // no dejamos la tabla en "Cargando…" esperando la red.
-    const hasCached = Array.isArray(State.get().leads) && State.get().leads.length > 0;
-    if (!force && (LEADS_LOAD.loadedOnce || hasCached)) return;
+    // El caché sirve para pintar rápido, pero nunca cuenta como lectura del
+    // servidor: cada sesión debe traer lo que guardó el resto del equipo.
+    if (!force && LEADS_LOAD.loadedOnce) return;
     if (LEADS_LOAD.inflight) return LEADS_LOAD.inflight;
 
     LEADS_LOAD.inflight = (async () => {
@@ -4069,7 +4435,9 @@ export function boot() {
         // Regla de precios y costos (los costos solo si el rol puede leerlos).
         await Promise.allSettled([ensurePricingLoaded_(true), ensureCostsLoaded_(true)]);
 
-        await loadAll_({ force: false });
+        // El caché solo acelera el primer pintado. La sesión siempre confirma
+        // contra Firestore para incluir lo que guardó el resto del equipo.
+        await loadAll_({ force: true });
         toast(`Sesión activa ✅ · ${Roles.label()}`, true);
       } catch (err) {
         console.error(err);
@@ -4120,6 +4488,3 @@ try {
     if (status) status.textContent = 'No se pudo iniciar el acceso con Google. Revisa la conexión e intenta de nuevo.';
   } catch {}
 }
-
-
-
