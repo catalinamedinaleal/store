@@ -57,7 +57,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-07-27.2";
+    window.__BUILD__ = "2026-08-21.1";
   </script>
 
   <!--
@@ -943,8 +943,11 @@
         </label>
 
         <label class="field" style="grid-column: 1 / -1;">
-          <span class="label">Imagen URL</span>
-          <input class="input" id="p_image" type="url" placeholder="https://..." />
+          <span class="label">Foto del producto</span>
+          <input class="input" id="p_image_file" type="file" accept="image/jpeg,image/png,image/webp" />
+          <span class="muted tiny">JPG, PNG o WEBP · máximo 10 MB. También puedes pegar una URL si ya la tienes.</span>
+          <input class="input" id="p_image" type="url" placeholder="https://..." style="margin-top:6px;" />
+          <div class="productImagePreview" id="p_image_preview" hidden></div>
         </label>
       </div>
 
@@ -954,6 +957,21 @@
         <button class="btn btn--ghost" id="btnCancelProduct" type="button" data-close-dialog="modalProduct">Cancelar</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Ficha comercial: no muestra costos internos. -->
+  <dialog class="modal" id="modalProductShare" aria-label="Ficha para cliente">
+    <div class="modal__card productShareCard">
+      <div class="modal__head">
+        <div><h3 class="h3">Ficha para cliente</h3><p class="muted tiny">Lista para copiar o enviar con su foto.</p></div>
+        <button class="btn btn--ghost" type="button" data-close-dialog="modalProductShare">Cerrar</button>
+      </div>
+      <div id="productShareContent"></div>
+      <div class="modal__foot">
+        <button class="btn btn--ghost" id="btnProductCopy" type="button">Copiar ficha</button>
+        <button class="btn btn--primary" id="btnProductShare" type="button">Enviar ficha y foto</button>
+      </div>
+    </div>
   </dialog>
 
   <!-- ✅ Modal: Interesado -->
@@ -1426,4 +1444,3 @@
   </script>
 </body>
 </html>
-

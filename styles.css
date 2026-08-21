@@ -1096,6 +1096,13 @@ th[data-sort-active="true"] .thSortIcon{
   .card__actions .input--sm{ flex: 1 1 240px; min-width: 0; }
   .pill{ padding: 8px 10px; }
 }
+.productImagePreview{ margin-top:10px; border:1px dashed var(--line); border-radius:14px; padding:8px; background:rgba(255,255,255,.7); }
+.productImagePreview img{ display:block; width:100%; max-height:240px; object-fit:contain; border-radius:10px; }
+.productShareHero{ display:grid; grid-template-columns:minmax(120px, .7fr) 1fr; gap:14px; align-items:start; }
+.productShareHero img{ width:100%; max-height:300px; object-fit:contain; border-radius:14px; background:#f7f7f7; }
+.productShareHero__details{ min-width:0; }
+.productShareHero__desc{ white-space:pre-wrap; }
+@media (max-width: 520px){ .productShareHero{ grid-template-columns:1fr; } .productShareHero img{ max-height:270px; } }
 
 /* El bloque de refinamiento general define tamaños globales después de los
    componentes. Estas reglas específicas preservan el ancho útil del cotizador. */

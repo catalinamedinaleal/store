@@ -21,7 +21,7 @@ Mantiene TODO:
 import { StoreAPI } from './firebase-store.js';
 import { State } from './state.js';
 import { STORE_CFG, ALLOWED_EMAILS } from './config.js';
-import { FirebaseAuth, initFirebase } from './firebase.js';
+import { FirebaseAuth, getFirebaseStorage, initFirebase } from './firebase.js';
 import { Roles } from './roles.js';
 import {
   DEFAULT_PRICING,
@@ -346,6 +346,12 @@ export function boot() {
     p_cost: $('p_cost'),
     p_desc: $('p_desc'),
     p_image: $('p_image'),
+    p_image_file: $('p_image_file'),
+    p_image_preview: $('p_image_preview'),
+    modalProductShare: $('modalProductShare'),
+    productShareContent: $('productShareContent'),
+    btnProductCopy: $('btnProductCopy'),
+    btnProductShare: $('btnProductShare'),
 
     // ✅ Nuevo opcional: precio de competencia (manual)
     // Si no existe en tu HTML, queda null y no molesta.
@@ -1554,6 +1560,7 @@ export function boot() {
           <td class="num mono">${toInt(stock)} ${stockBadge}</td>
           <td>${badge}</td>
           <td class="num actionsCell">
+            <button class="btn btn--tiny btn--primary" data-act="share" data-id="${escapeHtml(p.id)}">Ficha</button>
             <button class="btn btn--tiny btn--ghost" data-act="edit" data-id="${escapeHtml(p.id)}">Editar</button>
             <button class="btn btn--tiny btn--ghost" data-act="toggle" data-id="${escapeHtml(p.id)}" data-active="${active ? '1' : '0'}">
               ${active ? 'Ocultar' : 'Activar'}
@@ -2835,6 +2842,8 @@ export function boot() {
 
     if (el.p_desc) el.p_desc.value = p?.desc || '';
     if (el.p_image) el.p_image.value = p?.image_url || '';
+    if (el.p_image_file) el.p_image_file.value = '';
+    renderProductImagePreview_(p?.image_url || '');
 
     el.modalProduct?.showModal?.();
   }
@@ -2875,6 +2884,97 @@ export function boot() {
     };
   }
 
+  function renderProductImagePreview_(url) {
+    if (!el.p_image_preview) return;
+    const src = safeStr_(url, 2000);
+    el.p_image_preview.hidden = !src;
+    el.p_image_preview.innerHTML = src
+      ? `<img src="${escapeHtml(src)}" alt="Vista previa de la foto del producto" />`
+      : '';
+  }
+
+  function extensionForImage_(file) {
+    const type = String(file?.type || '').toLowerCase();
+    if (type === 'image/png') return 'png';
+    if (type === 'image/webp') return 'webp';
+    return 'jpg';
+  }
+
+  async function uploadProductImage_(file, productId) {
+    if (!file) return safeStr_(el.p_image?.value, 1200);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('La foto debe ser JPG, PNG o WEBP.');
+    if (file.size > 10 * 1024 * 1024) throw new Error('La foto supera el máximo de 10 MB.');
+    const storage = getFirebaseStorage();
+    if (!storage) throw new Error('Firebase Storage no está inicializado.');
+    const mod = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js');
+    const path = `products/${encodeURIComponent(productId)}/${Date.now()}.${extensionForImage_(file)}`;
+    const task = mod.ref(storage, path);
+    await mod.uploadBytes(task, file, { contentType: file.type, cacheControl: 'public,max-age=31536000,immutable' });
+    return mod.getDownloadURL(task);
+  }
+
+  function productShareText_(p) {
+    const lines = [
+      `*${safeStr_(p?.name, 220)}*`,
+      p?.brand ? `Marca: ${safeStr_(p.brand, 160)}` : '',
+      p?.category ? `Categoría: ${safeStr_(p.category, 160)}` : '',
+      pickPriceCOP_(p) > 0 ? `Precio: ${fmtCOP(pickPriceCOP_(p))}` : '',
+      p?.desc ? `\n${safeStr_(p.desc, 4000)}` : '',
+      p?.image_url ? `\nFoto: ${safeStr_(p.image_url, 1200)}` : '',
+    ].filter(Boolean);
+    return lines.join('\n');
+  }
+
+  let sharingProduct_ = null;
+  function openProductShare_(p) {
+    if (!p) { toast('No encontré ese producto', false); return; }
+    sharingProduct_ = p;
+    const photo = safeStr_(p.image_url, 1200);
+    const meta = [p.brand, p.category, p.sku ? `SKU: ${p.sku}` : ''].filter(Boolean).join(' · ');
+    if (el.productShareContent) el.productShareContent.innerHTML = `
+      <div class="productShareHero">
+        ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(p.name || 'Producto')}" />` : '<div class="productImagePreview" style="display:grid;place-items:center;min-height:130px;">Sin foto disponible</div>'}
+        <div class="productShareHero__details">
+          <h3 class="h3">${escapeHtml(p.name || 'Producto')}</h3>
+          ${meta ? `<p class="muted tiny">${escapeHtml(meta)}</p>` : ''}
+          ${pickPriceCOP_(p) > 0 ? `<p class="h2" style="margin:10px 0;">${escapeHtml(fmtCOP(pickPriceCOP_(p)))}</p>` : ''}
+          ${p.desc ? `<p class="productShareHero__desc">${escapeHtml(p.desc)}</p>` : ''}
+        </div>
+      </div>`;
+    el.modalProductShare?.showModal?.();
+  }
+
+  async function copyProductShare_() {
+    if (!sharingProduct_) return;
+    await copyText_(productShareText_(sharingProduct_));
+    toast('Ficha copiada: incluye los datos y el enlace de la foto ✅', true);
+  }
+
+  async function shareProduct_() {
+    if (!sharingProduct_) return;
+    const p = sharingProduct_;
+    const text = productShareText_(p);
+    try {
+      let files = [];
+      if (p.image_url && navigator.canShare && navigator.share) {
+        const res = await fetch(p.image_url);
+        if (res.ok) {
+          const blob = await res.blob();
+          const file = new File([blob], `foto-${slug_(p.name) || 'producto'}.${blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg'}`, { type: blob.type });
+          if (navigator.canShare({ files: [file] })) files = [file];
+        }
+      }
+      if (navigator.share) {
+        await navigator.share({ title: p.name || 'Producto Musicala', text, files });
+        return;
+      }
+    } catch (e) {
+      if (e?.name === 'AbortError') return;
+      // Si el navegador no permite adjuntar la foto, sí dejamos la ficha lista.
+    }
+    await copyProductShare_();
+  }
+
   async function saveProduct_() {
     const prod = readProductForm_();
     if (!prod.name) { toast('Falta nombre del producto', false); return; }
@@ -2884,6 +2984,8 @@ export function boot() {
       prod.id = newId;
       if (el.p_id) el.p_id.value = newId;
     }
+
+    const imageFile = el.p_image_file?.files?.[0] || null;
 
     if (!prod.price_cop) {
       toast(
@@ -2898,8 +3000,9 @@ export function boot() {
     const writeCost = !!prod._costTouched;
     delete prod._costTouched;
 
-    setBusy_(true, 'Guardando producto…');
+    setBusy_(true, imageFile ? 'Subiendo foto y guardando producto…' : 'Guardando producto…');
     try {
+      if (imageFile) prod.image_url = await uploadProductImage_(imageFile, prod.id);
       const res = await StoreAPI.upsertProduct(prod, {
         writeCost,
         includeCompetitor: Roles.can('see_competitor'),
@@ -3557,7 +3660,10 @@ export function boot() {
       if (!act || !id) return;
 
       try {
-        if (act === 'edit') {
+        if (act === 'share') {
+          await ensureProductsLoaded_().catch(() => {});
+          openProductShare_(State.productsIndex().get(String(id)) || null);
+        } else if (act === 'edit') {
           await ensureProductsLoaded_().catch(() => {});
           const p = State.productsIndex().get(String(id)) || null;
           openProductModal_(p);
@@ -3572,6 +3678,18 @@ export function boot() {
         toast(e?.message || String(e), false);
       }
     });
+
+    on(el.p_image_file, 'change', () => {
+      const file = el.p_image_file?.files?.[0];
+      if (!file) { renderProductImagePreview_(el.p_image?.value || ''); return; }
+      if (!file.type.startsWith('image/')) { toast('Selecciona una imagen válida', false); el.p_image_file.value = ''; return; }
+      renderProductImagePreview_(URL.createObjectURL(file));
+    });
+    on(el.p_image, 'input', debounce(() => {
+      if (!el.p_image_file?.files?.length) renderProductImagePreview_(el.p_image?.value || '');
+    }, 160));
+    on(el.btnProductCopy, 'click', () => copyProductShare_().catch(e => toast(e?.message || 'No pude copiar la ficha', false)));
+    on(el.btnProductShare, 'click', () => shareProduct_().catch(e => toast(e?.message || 'No pude preparar el envío', false)));
 
     on(el.btnRefreshOrders, 'click', async () => {
       await ensureOrdersLoaded_(true).catch(() => {});

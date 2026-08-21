@@ -1,0 +1,21 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isStaff() {
+      return request.auth != null && request.auth.token.email != null &&
+        request.auth.token.email.lower() in [
+          'alekcaballeromusic@gmail.com',
+          'catalina.medina.leal@gmail.com',
+          'adminmusicala@gmail.com',
+          'musicalaasesor@gmail.com'
+        ];
+    }
+    match /products/{productId}/{fileName} {
+      allow read: if isStaff();
+      allow create, update: if isStaff()
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if isStaff();
+    }
+  }
+}
