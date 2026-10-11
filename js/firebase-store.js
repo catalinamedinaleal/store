@@ -13,6 +13,95 @@ const s = (v) => String(v ?? '').trim();
 const id = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const iso = (v) => v?.toDate ? v.toDate().toISOString() : (v || '');
 const item = (snap) => ({ id: snap.id, ...snap.data() });
+const BUSINESS_DAY_FORMAT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+function businessDate_(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = value?.toDate ? value.toDate() : new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = BUSINESS_DAY_FORMAT.formatToParts(date);
+  const part = type => parts.find(x => x.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+const SALE_STATUSES = new Set(['pending', 'installments', 'paid', 'cancelled']);
+const saleStatus_ = (value) => {
+  const status = s(value).toLowerCase();
+  return ({ pagado: 'paid', pendiente: 'pending', cancelado: 'cancelled' })[status] || status;
+};
+
+// posted indica que la venta ya descontó inventario, independientemente de
+// cuántos abonos tenga. Las ventas antiguas a cuotas guardaban posted:false
+// aunque ya habían descontado: el estado conserva esa compatibilidad.
+const stockPosted_ = (sale) => sale?.posted === true || ['paid', 'installments'].includes(saleStatus_(sale?.status));
+
+function saleQuantities_(items) {
+  const quantities = new Map();
+  for (const row of (Array.isArray(items) ? items : [])) {
+    const productId = s(row?.product_id);
+    const qty = n(row?.qty);
+    if (!productId || qty <= 0) throw new Error('La venta contiene un producto o cantidad inválidos.');
+    quantities.set(productId, (quantities.get(productId) || 0) + qty);
+  }
+  if (!quantities.size) throw new Error('Agrega al menos un producto.');
+  return quantities;
+}
+
+async function readSaleStock_(f, db, tx, items, direction) {
+  const rows = [];
+  for (const [productId, qty] of saleQuantities_(items)) {
+    const ref = f.doc(db, 'inventory', productId);
+    const current = (await tx.get(ref)).data() || {};
+    const delta = direction * qty;
+    const stock = n(current.stock) + delta;
+    if (stock < 0) throw new Error('Stock insuficiente para ' + productId);
+    rows.push({ ref, current, productId, delta, stock });
+  }
+  return rows;
+}
+
+function writeSaleStock_(f, db, tx, rows, saleId, type = 'sale', actor = '') {
+  // Todas las lecturas terminaron antes de empezar a escribir; cada producto
+  // recibe un solo cambio aun cuando aparezca en varias líneas comerciales.
+  for (const { ref, current, productId, delta, stock } of rows) {
+    const moveId = id('mov');
+    tx.set(ref, {
+      ...current, product_id: productId, stock,
+      updated_at: f.serverTimestamp(), updated_by: s(actor),
+    }, { merge: true });
+    tx.set(f.doc(db, 'inventoryMoves', moveId), {
+      move_id: moveId, product_id: productId, type, qty: delta,
+      ref: s(saleId), note: (delta < 0 ? 'Venta ' : 'Devolución venta ') + s(saleId),
+      date: f.serverTimestamp(), created_by: s(actor),
+    });
+  }
+}
+
+function salePayments_(sale) {
+  const payments = Array.isArray(sale?.payments) ? sale.payments : [];
+  if (payments.length) return payments;
+  const paid = sale?.paid_cop !== undefined
+    ? Math.max(0, n(sale.paid_cop))
+    : (saleStatus_(sale?.status) === 'paid' ? Math.max(0, n(sale.total_cop)) : 0);
+  return paid > 0 ? [{
+    amount_cop: paid, date: iso(sale.paid_at || sale.created_at) || new Date().toISOString(),
+    method: s(sale.payment_method), note: 'Pago registrado anteriormente',
+  }] : [];
+}
+
+function paymentTotals_(sale, payments = salePayments_(sale)) {
+  const total = Math.max(0, n(sale?.total_cop));
+  const list = Array.isArray(payments) ? payments : [];
+  const paid = list.reduce((sum, payment) => sum + Math.max(0, n(payment?.amount_cop)), 0);
+  if (paid > total) throw new Error('Los abonos superan el total de la venta.');
+  return { total, paid, balance: total - paid };
+}
+
+function assertPaymentSale_(sale) {
+  if (saleStatus_(sale?.status) === 'cancelled') throw new Error('La venta está cancelada. No se pueden modificar sus abonos.');
+}
 
 async function all_(collection, orderByField = '') {
   const f = await sdk_();
@@ -146,13 +235,13 @@ export const StoreAPI = {
   async profitReport() {
     const [sales, costs] = await Promise.all([allIncludingMissing_('sales', 'created_at'), all_('productCosts')]);
     const costOf = new Map(costs.map(c => [s(c.product_id || c.id), n(c.cost_cop)]));
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessDate_(new Date());
 
     let revenue = 0, cogs = 0, revenueToday = 0, cogsToday = 0, unknownCost = 0;
 
     for (const sale of sales) {
       if (sale.status !== 'paid') continue;
-      const isToday = iso(sale.created_at).slice(0, 10) === today;
+      const isToday = businessDate_(sale.paid_at || sale.created_at) === today;
 
       for (const row of (sale.items || [])) {
         const qty = n(row.qty);
@@ -265,31 +354,49 @@ export const StoreAPI = {
   async setProductActive(productId, active) { const f = await sdk_(); await f.updateDoc(f.doc(getFirestoreDb(), 'products', s(productId)), { active: !!active, updated_at: f.serverTimestamp() }); return { ok: true, active: !!active }; },
   async updateInventoryMeta(data = {}) { const f = await sdk_(); const pid = s(data.product_id); await f.setDoc(f.doc(getFirestoreDb(), 'inventory', pid), { product_id: pid, min_stock: Math.max(0,n(data.min_stock)), location: s(data.location), updated_at: f.serverTimestamp() }, { merge: true }); return { ok: true }; },
   async adjustStock(data = {}) {
-    const f = await sdk_(), db = getFirestoreDb(), pid = s(data.product_id), delta = n(data.qty); if (!pid || !delta) throw new Error('Producto y cantidad válidos son obligatorios.');
+    const f = await sdk_(), db = getFirestoreDb(), pid = s(data.product_id);
+    const setTarget = data.target_stock !== undefined;
+    if (!pid || !setTarget && !n(data.qty)) throw new Error('Producto y cantidad válidos son obligatorios.');
+    if (setTarget && (!Number.isInteger(Number(data.target_stock)) || Number(data.target_stock) < 0)) throw new Error('El conteo debe ser un número entero no negativo.');
     const invRef = f.doc(db, 'inventory', pid), moveId = id('mov');
-    await f.runTransaction(db, async tx => { const current = (await tx.get(invRef)).data() || {}; const stock = n(current.stock) + delta; if (stock < 0) throw new Error('No hay stock suficiente.'); tx.set(invRef, { product_id: pid, stock, min_stock:n(current.min_stock), location:s(current.location), updated_at:f.serverTimestamp() }, { merge:true }); tx.set(f.doc(db,'inventoryMoves',moveId), { move_id:moveId, product_id:pid, type:s(data.type)||'adjust', qty:delta, ref:s(data.ref), note:s(data.note), date:f.serverTimestamp() }); });
+    await f.runTransaction(db, async tx => {
+      const current = (await tx.get(invRef)).data() || {};
+      const stock = setTarget ? n(data.target_stock) : n(current.stock) + n(data.qty);
+      const delta = stock - n(current.stock);
+      if (stock < 0) throw new Error('No hay stock suficiente.');
+      if (!delta) return;
+      tx.set(invRef, { product_id: pid, stock, min_stock:n(current.min_stock), location:s(current.location), updated_at:f.serverTimestamp(), updated_by:s(data.updated_by) }, { merge:true });
+      tx.set(f.doc(db,'inventoryMoves',moveId), { move_id:moveId, product_id:pid, type:s(data.type)||'adjust', qty:delta, ref:s(data.ref), note:s(data.note), date:f.serverTimestamp(), created_by:s(data.updated_by) });
+    });
     const now = await f.getDoc(invRef); return { ok:true, move_id:moveId, stock:n(now.data()?.stock) };
   },
   async listSales(status = 'pending', includeItems = false, limit = 200) { let sales = await allIncludingMissing_('sales','created_at'); if (status && status !== 'all') sales = sales.filter(x => x.status === status); return { ok:true, items:sales.slice(0,limit).map(x => ({...x,created_at:iso(x.created_at),paid_at:iso(x.paid_at),items:includeItems ? (x.items||[]) : undefined})) }; },
   async getSale(saleId) { const f=await sdk_(); const snap=await f.getDoc(f.doc(getFirestoreDb(),'sales',s(saleId))); if(!snap.exists()) throw new Error('Venta no encontrada'); const x=item(snap); return {ok:true,sale:{...x,created_at:iso(x.created_at),paid_at:iso(x.paid_at)},items:x.items||[]}; },
-  async createSale({ sale = {}, items = [] } = {}) {
+  async createSale({ sale = {}, items = [], pendingId = '' } = {}) {
     const f = await sdk_();
     const db = getFirestoreDb();
-    const saleId = id('sale');
+    const saleId = s(pendingId) || id('sale');
+    const saleRef = f.doc(db, 'sales', saleId);
+    if (!Array.isArray(items)) throw new Error('Agrega al menos un producto.');
+    if (items.some(row => !Number.isFinite(Number(row?.unit_price)) || Number(row.unit_price) < 0)) {
+      throw new Error('El precio de venta debe ser válido y no puede ser negativo.');
+    }
     const clean = items
       .map(x => ({
-        product_id: s(x.product_id),
-        qty: n(x.qty),
-        unit_price: n(x.unit_price),
-        subtotal: n(x.qty) * n(x.unit_price),
-      }))
-      .filter(x => x.product_id && x.qty > 0);
+        product_id: s(x?.product_id),
+        qty: n(x?.qty),
+        unit_price: n(x?.unit_price),
+        subtotal: n(x?.qty) * n(x?.unit_price),
+      }));
 
-    if (!clean.length) throw new Error('Agrega al menos un producto.');
+    saleQuantities_(clean);
+    if (clean.some(row => row.unit_price < 0)) throw new Error('El precio de venta no puede ser negativo.');
 
     const total = clean.reduce((a, x) => a + x.subtotal, 0);
-    const requested = s(sale.status) || 'paid';
-    const initial = Math.min(total, Math.max(0, n(sale.initial_payment_cop)));
+    const requested = saleStatus_(sale.status) || 'paid';
+    if (!SALE_STATUSES.has(requested)) throw new Error('Estado de venta inválido.');
+    const initial = Math.max(0, n(sale.initial_payment_cop));
+    if (requested === 'installments' && initial > total) throw new Error('El abono inicial no puede superar el total.');
     const status = requested === 'installments'
       ? (initial >= total ? 'paid' : 'installments')
       : requested;
@@ -304,37 +411,20 @@ export const StoreAPI = {
     }] : [];
 
     await f.runTransaction(db, async tx => {
+      const previous = pendingId ? (await tx.get(saleRef)).data() : null;
+      if (pendingId && (!previous || saleStatus_(previous.status) !== 'pending' || stockPosted_(previous) || n(previous.paid_cop) > 0 || salePayments_(previous).length)) {
+        throw new Error('Este pedido ya cambió de estado. Actualiza las ventas antes de editarlo.');
+      }
       if (status === 'paid' || status === 'installments') {
-        const inventoryRows = [];
-        for (const row of clean) {
-          const ref = f.doc(db, 'inventory', row.product_id);
-          const cur = (await tx.get(ref)).data() || {};
-          const stock = n(cur.stock) - row.qty;
-          if (stock < 0) throw new Error('Stock insuficiente para ' + row.product_id);
-          inventoryRows.push({ row, ref, cur, stock });
-        }
-
-        // Firestore exige completar todas las lecturas antes de empezar a
-        // escribir dentro de la transacción. Esto también cubre carritos con
-        // varios productos, no solo ventas de una línea.
-        for (const { row, ref, cur, stock } of inventoryRows) {
-          const moveId = id('mov');
-          tx.set(ref, { ...cur, product_id: row.product_id, stock, updated_at: f.serverTimestamp() }, { merge: true });
-          tx.set(f.doc(db, 'inventoryMoves', moveId), {
-            move_id: moveId,
-            product_id: row.product_id,
-            type: 'sale',
-            qty: -row.qty,
-            ref: saleId,
-            note: 'Venta ' + saleId,
-            date: f.serverTimestamp(),
-          });
-        }
+        const inventoryRows = await readSaleStock_(f, db, tx, clean, -1);
+        writeSaleStock_(f, db, tx, inventoryRows, saleId, 'sale', actor);
       }
 
-      tx.set(f.doc(db, 'sales', saleId), {
+      tx.set(saleRef, {
         id: saleId,
         customer_id: s(sale.customer_id),
+        customer_phone: s(sale.customer_phone),
+        lead_id: s(sale.lead_id),
         payment_method: s(sale.payment_method),
         status,
         total_cop: total,
@@ -342,76 +432,86 @@ export const StoreAPI = {
         balance_cop: balance,
         payments,
         notes: s(sale.notes),
-        created_at: f.serverTimestamp(),
-        created_by: actor,
+        created_at: previous?.created_at || f.serverTimestamp(),
+        created_by: previous?.created_by || actor,
         updated_at: f.serverTimestamp(),
         updated_by: actor,
         paid_at: status === 'paid' ? f.serverTimestamp() : null,
-        posted: status === 'paid',
+        posted: status === 'paid' || status === 'installments',
         items: clean,
-      });
+      }, { merge: !!pendingId });
     });
 
-    return { ok: true, id: saleId, total_cop: total, balance_cop: balance };
+    return { ok: true, id: saleId, status, total_cop: total, balance_cop: balance };
   },
-  async addPayment(saleId, amount, method = 'cash', note = '') { const f=await sdk_(),db=getFirestoreDb(),ref=f.doc(db,'sales',s(saleId)),value=Math.max(0,n(amount));if(!value)throw new Error('Ingresa un abono válido.');await f.runTransaction(db,async tx=>{const sale=(await tx.get(ref)).data();if(!sale)throw new Error('Venta no encontrada');const balance=Math.max(0,n(sale.balance_cop));if(value>balance)throw new Error('El abono supera el saldo pendiente.');const nextBalance=balance-value,nextStatus=nextBalance===0?'paid':'installments',payments=[...(sale.payments||[]),{amount_cop:value,date:new Date().toISOString(),method:s(method)||'cash',note:s(note)}];tx.update(ref,{paid_cop:n(sale.paid_cop)+value,balance_cop:nextBalance,status:nextStatus,payments,paid_at:nextStatus==='paid'?f.serverTimestamp():null,posted:nextStatus==='paid'});});return {ok:true}; },
+  async savePendingSale(saleId, payload = {}) {
+    if (!s(saleId)) throw new Error('Pedido inválido.');
+    return this.createSale({ ...payload, pendingId: s(saleId) });
+  },
+  async addPayment(saleId, amount, method = 'cash', note = '', updatedBy = '') {
+    const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
+    const value = Math.max(0, n(amount));
+    if (!value) throw new Error('Ingresa un abono válido.');
+    await f.runTransaction(db, async tx => {
+      const sale = (await tx.get(ref)).data();
+      if (!sale) throw new Error('Venta no encontrada');
+      assertPaymentSale_(sale);
+      const payments = salePayments_(sale);
+      const { paid, balance } = paymentTotals_(sale, payments);
+      if (value > balance) throw new Error('El abono supera el saldo pendiente.');
+      const nextBalance = balance - value;
+      const nextStatus = nextBalance === 0 ? 'paid' : 'installments';
+      const inventoryRows = stockPosted_(sale) ? [] : await readSaleStock_(f, db, tx, sale.items, -1);
+      writeSaleStock_(f, db, tx, inventoryRows, saleId, 'sale', updatedBy);
+      tx.update(ref, {
+        paid_cop: paid + value, balance_cop: nextBalance, status: nextStatus,
+        payments: payments.concat([{
+          amount_cop: value, date: new Date().toISOString(), method: s(method) || 'cash',
+          note: s(note), by: s(updatedBy),
+        }]),
+        paid_at: nextStatus === 'paid' ? (sale.paid_at || f.serverTimestamp()) : null,
+        posted: true, updated_at: f.serverTimestamp(), updated_by: s(updatedBy),
+      });
+    });
+    return { ok: true };
+  },
   async updateSaleStatus(saleId, status, updatedBy = '') {
     const f = await sdk_();
     const db = getFirestoreDb();
     const ref = f.doc(db, 'sales', s(saleId));
-    const next = s(status);
+    const next = saleStatus_(status);
+    if (!SALE_STATUSES.has(next)) throw new Error('Estado de venta inválido.');
 
     await f.runTransaction(db, async tx => {
       const sale = (await tx.get(ref)).data();
       if (!sale) throw new Error('Venta no encontrada');
-
-      if (next === 'paid' && sale.status !== 'paid') {
-        const inventoryRows = [];
-        for (const row of (sale.items || [])) {
-          const productId = s(row.product_id);
-          const inv = f.doc(db, 'inventory', productId);
-          const cur = (await tx.get(inv)).data() || {};
-          const stock = n(cur.stock) - n(row.qty);
-          if (stock < 0) throw new Error('Stock insuficiente para ' + productId);
-          inventoryRows.push({ row, productId, inv, cur, stock });
-        }
-
-        for (const { row, productId, inv, cur, stock } of inventoryRows) {
-          const moveId = id('mov');
-          tx.set(inv, { ...cur, product_id: productId, stock, updated_at: f.serverTimestamp() }, { merge: true });
-          tx.set(f.doc(db, 'inventoryMoves', moveId), {
-            move_id: moveId,
-            product_id: productId,
-            type: 'sale',
-            qty: -n(row.qty),
-            ref: s(saleId),
-            note: 'Venta ' + s(saleId),
-            date: f.serverTimestamp(),
-          });
-        }
-      }
-
+      const currentPayments = salePayments_(sale);
+      const { total, paid, balance } = paymentTotals_(sale, currentPayments);
+      if (next === 'pending' && paid > 0) throw new Error('Una venta con abonos no puede volver a pedido pendiente.');
+      const actualNext = next === 'installments' && balance === 0 ? 'paid' : next;
+      const shouldPost = actualNext === 'paid' || actualNext === 'installments';
+      const wasPosted = stockPosted_(sale);
+      const inventoryRows = shouldPost === wasPosted ? []
+        : await readSaleStock_(f, db, tx, sale.items, shouldPost ? -1 : 1);
+      writeSaleStock_(f, db, tx, inventoryRows, saleId, shouldPost ? 'sale' : 'sale_cancel', updatedBy);
       const patch = {
-        status: next,
-        paid_at: next === 'paid' ? f.serverTimestamp() : null,
-        posted: next === 'paid',
+        status: actualNext,
+        paid_at: actualNext === 'paid' ? (sale.paid_at || f.serverTimestamp()) : null,
+        posted: shouldPost,
+        paid_cop: paid, balance_cop: balance,
         updated_at: f.serverTimestamp(),
         updated_by: s(updatedBy),
       };
 
-      if (next === 'paid') {
-        const total = n(sale.total_cop);
-        const currentPayments = Array.isArray(sale.payments) ? sale.payments : [];
-        const alreadyPaid = currentPayments.reduce((sum, payment) => sum + n(payment.amount_cop), 0);
-        const remaining = Math.max(0, total - alreadyPaid);
+      if (actualNext === 'paid') {
         patch.paid_cop = total;
         patch.balance_cop = 0;
-        patch.payments = remaining > 0
+        patch.payments = balance > 0
           ? currentPayments.concat([{
-            amount_cop: remaining,
+            amount_cop: balance,
             date: new Date().toISOString(),
             method: s(sale.payment_method),
-            note: 'Pago completo',
+            note: 'Pago completo', by: s(updatedBy),
           }])
           : currentPayments;
       }
@@ -425,75 +525,81 @@ export const StoreAPI = {
     const f = await sdk_(); const ref = f.doc(getFirestoreDb(), 'sales', s(saleId));
     const data = {};
     if ('customer_id' in patch) data.customer_id = s(patch.customer_id);
+    if ('customer_phone' in patch) data.customer_phone = s(patch.customer_phone);
+    if ('lead_id' in patch) data.lead_id = s(patch.lead_id);
     if ('payment_method' in patch) data.payment_method = s(patch.payment_method);
     if ('notes' in patch) data.notes = s(patch.notes);
     if (!Object.keys(data).length) return { ok: true };
     data.updated_at = f.serverTimestamp();
+    if ('updated_by' in patch) data.updated_by = s(patch.updated_by);
     await f.updateDoc(ref, data);
     return { ok: true };
   },
-  async deleteSale(saleId) {
+  async deleteSale(saleId, updatedBy = '') {
     const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
     await f.runTransaction(db, async tx => {
       const sale = (await tx.get(ref)).data();
       if (!sale) throw new Error('Venta no encontrada');
-      const discounted = sale.status === 'paid' || sale.status === 'installments';
+      const discounted = stockPosted_(sale);
       if (discounted) {
-        // Devolver el stock que la venta había descontado
-        const rows = (sale.items || []).filter(r => s(r.product_id) && n(r.qty) > 0);
-        const reads = [];
-        for (const row of rows) {
-          const inv = f.doc(db, 'inventory', s(row.product_id));
-          reads.push([row, inv, (await tx.get(inv)).data() || {}]);
-        }
-        for (const [row, inv, cur] of reads) {
-          const stock = n(cur.stock) + n(row.qty);
-          const moveId = id('mov');
-          tx.set(inv, { ...cur, product_id: s(row.product_id), stock, updated_at: f.serverTimestamp() }, { merge: true });
-          tx.set(f.doc(db, 'inventoryMoves', moveId), { move_id: moveId, product_id: s(row.product_id), type: 'sale_delete', qty: n(row.qty), ref: s(saleId), note: 'Eliminación venta ' + s(saleId), date: f.serverTimestamp() });
-        }
+        const rows = await readSaleStock_(f, db, tx, sale.items, 1);
+        writeSaleStock_(f, db, tx, rows, saleId, 'sale_delete', updatedBy);
       }
       tx.delete(ref);
     });
     return { ok: true };
   },
-  async updatePayment(saleId, index, { amount, method, note } = {}) {
+  async updatePayment(saleId, index, { amount, method, note, updatedBy = '' } = {}) {
     const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
     await f.runTransaction(db, async tx => {
       const sale = (await tx.get(ref)).data();
       if (!sale) throw new Error('Venta no encontrada');
+      assertPaymentSale_(sale);
       const payments = [...(sale.payments || [])];
       const i = n(index);
-      if (i < 0 || i >= payments.length) throw new Error('Abono no encontrado');
+      if (!Number.isInteger(Number(index)) || i < 0 || i >= payments.length) throw new Error('Abono no encontrado');
       const next = { ...payments[i] };
-      if (amount !== undefined) next.amount_cop = Math.max(0, n(amount));
+      if (amount !== undefined) {
+        if (n(amount) <= 0) throw new Error('Ingresa un abono válido.');
+        next.amount_cop = n(amount);
+      }
       if (method !== undefined) next.method = s(method) || 'cash';
       if (note !== undefined) next.note = s(note);
       next.edited_at = new Date().toISOString();
+      next.edited_by = s(updatedBy);
       payments[i] = next;
-      const total = n(sale.total_cop);
-      const paid = payments.reduce((a, p) => a + n(p.amount_cop), 0);
-      if (paid > total) throw new Error('Los abonos superan el total de la venta.');
-      const balance = total - paid;
+      const { paid, balance } = paymentTotals_(sale, payments);
       const status = balance === 0 ? 'paid' : 'installments';
-      tx.update(ref, { payments, paid_cop: paid, balance_cop: balance, status, posted: status === 'paid', paid_at: status === 'paid' ? f.serverTimestamp() : null });
+      const inventoryRows = stockPosted_(sale) ? [] : await readSaleStock_(f, db, tx, sale.items, -1);
+      writeSaleStock_(f, db, tx, inventoryRows, saleId, 'sale', updatedBy);
+      tx.update(ref, {
+        payments, paid_cop: paid, balance_cop: balance, status, posted: true,
+        paid_at: status === 'paid' ? (sale.paid_at || f.serverTimestamp()) : null,
+        updated_at: f.serverTimestamp(), updated_by: s(updatedBy),
+      });
     });
     return { ok: true };
   },
-  async deletePayment(saleId, index) {
+  async deletePayment(saleId, index, updatedBy = '') {
     const f = await sdk_(), db = getFirestoreDb(), ref = f.doc(db, 'sales', s(saleId));
     await f.runTransaction(db, async tx => {
       const sale = (await tx.get(ref)).data();
       if (!sale) throw new Error('Venta no encontrada');
+      assertPaymentSale_(sale);
       const payments = [...(sale.payments || [])];
       const i = n(index);
-      if (i < 0 || i >= payments.length) throw new Error('Abono no encontrado');
+      if (!Number.isInteger(Number(index)) || i < 0 || i >= payments.length) throw new Error('Abono no encontrado');
       payments.splice(i, 1);
-      const total = n(sale.total_cop);
-      const paid = payments.reduce((a, p) => a + n(p.amount_cop), 0);
-      const balance = total - paid;
+      const { total, paid, balance } = paymentTotals_(sale, payments);
+      // Quitar un abono corrige el dinero, no deshace la entrega del producto.
       const status = balance === 0 && total > 0 ? 'paid' : 'installments';
-      tx.update(ref, { payments, paid_cop: paid, balance_cop: balance, status, posted: status === 'paid', paid_at: status === 'paid' ? f.serverTimestamp() : null });
+      const inventoryRows = stockPosted_(sale) ? [] : await readSaleStock_(f, db, tx, sale.items, -1);
+      writeSaleStock_(f, db, tx, inventoryRows, saleId, 'sale', updatedBy);
+      tx.update(ref, {
+        payments, paid_cop: paid, balance_cop: balance, status, posted: true,
+        paid_at: status === 'paid' ? (sale.paid_at || f.serverTimestamp()) : null,
+        updated_at: f.serverTimestamp(), updated_by: s(updatedBy),
+      });
     });
     return { ok: true };
   },
@@ -579,5 +685,20 @@ export const StoreAPI = {
     return { ok: true };
   },
 
-  async dashboard() { const [products,inventory,sales]=await Promise.all([all_('products'),all_('inventory'),allIncludingMissing_('sales','created_at')]); const paid=sales.filter(x=>x.status==='paid'); const today=new Date().toISOString().slice(0,10); return {ok:true,products_count:products.length,low_stock:inventory.filter(x=>n(x.stock)<=n(x.min_stock)),today_total_cop:paid.filter(x=>iso(x.created_at).slice(0,10)===today).reduce((a,x)=>a+n(x.total_cop),0),total_cop:paid.reduce((a,x)=>a+n(x.total_cop),0),sales_count:paid.length}; },
+  async dashboard() {
+    const [products, inventory, sales] = await Promise.all([
+      all_('products'), all_('inventory'), allIncludingMissing_('sales', 'created_at'),
+    ]);
+    const paid = sales.filter(x => x.status === 'paid');
+    const today = businessDate_(new Date());
+    return {
+      ok: true,
+      products_count: products.length,
+      low_stock: inventory.filter(x => n(x.stock) <= n(x.min_stock)),
+      today_total_cop: paid.filter(x => businessDate_(x.paid_at || x.created_at) === today)
+        .reduce((sum, x) => sum + n(x.total_cop), 0),
+      total_cop: paid.reduce((sum, x) => sum + n(x.total_cop), 0),
+      sales_count: paid.length,
+    };
+  },
 };

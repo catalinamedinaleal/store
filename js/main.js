@@ -230,6 +230,19 @@ export function boot() {
     qCatalog: $('qCatalog'),
     btnNewProduct: $('btnNewProduct'),
     catalogBody: $('catalogBody'),
+    catalogGrid: $('catalogGrid'),
+    catalogTableWrap: $('catalogTableWrap'),
+    catalogCategory: $('catalogCategory'),
+    catalogAvailability: $('catalogAvailability'),
+    catalogStatus: $('catalogStatus'),
+    catalogSort: $('catalogSort'),
+    catalogLayout: $('catalogLayout'),
+    catalogMeta: $('catalogMeta'),
+    btnCatalogReset: $('btnCatalogReset'),
+    productCategories: $('productCategories'),
+    opsSummary: $('opsSummary'),
+    storeSyncStatus: $('storeSyncStatus'),
+    storeDataNotice: $('storeDataNotice'),
 
     // inventory
     qInventory: $('qInventory'),
@@ -246,6 +259,7 @@ export function boot() {
     saleItemsBody: $('saleItemsBody'),
     saleTotal: $('saleTotal'),
     saleCustomer: $('saleCustomer'),
+    saleCustomerPhone: $('saleCustomerPhone'),
     salePay: $('salePay'),
     saleStatus: $('saleStatus'),
     saleInitialPayment: $('saleInitialPayment'),
@@ -260,6 +274,9 @@ export function boot() {
     ordersMeta: $('ordersMeta'),
     ordersPane: $('ordersPane'),
     ordersFilter: $('ordersFilter'),
+    ordersSearch: $('ordersSearch'),
+    salesSummary: $('salesSummary'),
+    saleStockHelp: $('saleStockHelp'),
 
     // cotizador admin
     btnQuoteOpen: $('btnQuoteOpen'),
@@ -284,6 +301,7 @@ export function boot() {
     sd_id: $('sd_id'),
     sd_created: $('sd_created'),
     sd_customer: $('sd_customer'),
+    sd_phone: $('sd_phone'),
     sd_pay: $('sd_pay'),
     sd_notes: $('sd_notes'),
     sd_summary: $('sd_summary'),
@@ -297,6 +315,8 @@ export function boot() {
 
     // ✅ Interesados (leads)
     qLeads: $('qLeads'),
+    leadsStatus: $('leadsStatus'),
+    leadsMeta: $('leadsMeta'),
     onlyLeadsDue: $('onlyLeadsDue'),
     btnNewLead: $('btnNewLead'),
     leadsBody: $('leadsBody'),
@@ -321,6 +341,7 @@ export function boot() {
 
     modalFollowUp: $('modalFollowUp'),
     fu_lead_id: $('fu_lead_id'),
+    followUpForm: $('followUpForm'),
     fu_who: $('fu_who'),
     fu_note: $('fu_note'),
     fu_next: $('fu_next'),
@@ -352,6 +373,12 @@ export function boot() {
     productShareContent: $('productShareContent'),
     btnProductCopy: $('btnProductCopy'),
     btnProductShare: $('btnProductShare'),
+    btnProductPhoto: $('btnProductPhoto'),
+    btnProductDownload: $('btnProductDownload'),
+    btnProductSell: $('btnProductSell'),
+    btnProductLead: $('btnProductLead'),
+    btnProductEdit: $('btnProductEdit'),
+    btnRemoveProductImage: $('btnRemoveProductImage'),
 
     // ✅ Nuevo opcional: precio de competencia (manual)
     // Si no existe en tu HTML, queda null y no molesta.
@@ -495,11 +522,27 @@ export function boot() {
     const isInstallment = el.saleStatus?.value === 'installments';
     if (el.saleInitialPaymentField) el.saleInitialPaymentField.hidden = !isInstallment;
     if (!isInstallment && el.saleInitialPayment) el.saleInitialPayment.value = '0';
+    if (el.saleStockHelp) el.saleStockHelp.textContent = el.saleStatus?.value === 'pending'
+      ? 'Pedido pendiente: guarda la propuesta sin descontar ni reservar inventario. El stock se comprueba al confirmar o recibir un abono.'
+      : el.saleStatus?.value === 'cancelled' ? 'Una venta cancelada no descuenta inventario.'
+      : 'Venta confirmada: descuenta inventario una sola vez y registra el movimiento. A cuotas, conserva el saldo por cobrar.';
   }
 
   function safeStr_(v, max = 4000) {
     const s = String(v ?? '').trim();
     return s.length > max ? s.slice(0, max) : s;
+  }
+
+  const searchKey_ = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const matchesSearch_ = (values, query) => {
+    const haystack = searchKey_(values.filter(Boolean).join(' '));
+    return searchKey_(query).split(/\s+/).filter(Boolean).every(word => haystack.includes(word));
+  };
+  function imageUrl_(value) {
+    try {
+      const url = new URL(String(value || ''), location.href);
+      return ['https:', 'http:'].includes(url.protocol) && value ? url.href : '';
+    } catch { return ''; }
   }
 
   function pickPriceCOP_(p) { return toInt(p?.price_cop ?? p?.price ?? p?.precio_cop ?? p?.precio); }
@@ -517,17 +560,17 @@ export function boot() {
 
   /* Fecha y hora claras, en hora local (es-CO) */
   function fmtDatePart_(v) {
-    const d = new Date(v);
+    const d = v?.toDate ? v.toDate() : new Date(v);
     if (!v || isNaN(d)) return String(v || '—');
     try {
-      return new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(d);
+      return new Intl.DateTimeFormat('es-CO', { timeZone: 'America/Bogota', weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(d);
     } catch { return d.toLocaleDateString(); }
   }
   function fmtTimePart_(v) {
-    const d = new Date(v);
+    const d = v?.toDate ? v.toDate() : new Date(v);
     if (!v || isNaN(d)) return '';
     try {
-      return new Intl.DateTimeFormat('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
+      return new Intl.DateTimeFormat('es-CO', { timeZone: 'America/Bogota', hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
     } catch { return d.toLocaleTimeString(); }
   }
   function fmtDateTime_(v) {
@@ -654,6 +697,7 @@ export function boot() {
     if (!force && COSTS.loaded) return COSTS.map;
     if (COSTS.inflight) return COSTS.inflight;
 
+    const loadingEmail = Roles.email();
     COSTS.inflight = (async () => {
       try {
         const res = await StoreAPI.listProductCosts();
@@ -662,7 +706,7 @@ export function boot() {
           const pid = String(c.product_id || c.id || '').trim();
           if (pid) m.set(pid, c);
         }
-        COSTS.map = m;
+        COSTS.map = Roles.can('see_costs') && Roles.email() === loadingEmail ? m : new Map();
       } catch {
         COSTS.map = new Map();
       }
@@ -872,18 +916,14 @@ export function boot() {
 
     const prev = currentTab_();
 
-    if (prev === next) {
-      renderActive_();
-      return;
-    }
-
-    State.setTab(next);
+    if (prev !== next) State.setTab(next);
 
     if (Array.isArray(el.tabs) && el.tabs.length) {
       el.tabs.forEach(btn => {
         const t = btn?.dataset?.tab;
         if (!t) return;
         btn.classList.toggle('is-active', t === next);
+        btn.setAttribute('aria-selected', String(t === next));
       });
     }
 
@@ -893,20 +933,22 @@ export function boot() {
     });
 
     const after = () => renderActive_();
+    if (!Roles.isStaff()) return;
 
-    if (next === 'catalog') ensureProductsLoaded_().finally(after);
+    const report = (error) => toast(error?.message || 'No pude cargar la sección. Usa Actualizar.', false);
+    if (next === 'catalog') Promise.all([ensureProductsLoaded_(), ensureInventoryLoaded_()]).catch(report).finally(after);
     else if (next === 'inventory') Promise.all([
       ensureProductsLoaded_(),
       ensureInventoryLoaded_(),
-    ]).then(() => buildInventoryProductDatalist_()).finally(after);
-    else if (next === 'sales') ensureProductsLoaded_().finally(() => { syncSalesUI_(); after(); });
+    ]).then(() => buildInventoryProductDatalist_()).catch(report).finally(after);
+    else if (next === 'sales') Promise.all([ensureProductsLoaded_(), ensureOrdersLoaded_()]).catch(report).finally(() => { syncSalesUI_(); after(); });
     else if (next === 'leads') Promise.all([
       ensureProductsLoaded_().catch(() => {}),
       ensureLeadsLoaded_().catch(() => {}),
     ]).finally(after);
     else if (next === 'moves') { after(); loadMoves_(State.get().movesQuery || ''); }
-    else if (next === 'restock') ensureProductsLoaded_().finally(after);
-    else if (next === 'dashboard') ensureDashboardLoaded_().finally(after);
+    else if (next === 'restock') ensureProductsLoaded_().catch(report).finally(after);
+    else if (next === 'dashboard') ensureDashboardLoaded_().catch(report).finally(after);
     else after();
   }
 
@@ -951,12 +993,14 @@ export function boot() {
       // El detalle viaja en esta lectura para que el cotizador pueda combinar
       // varios carritos sin hacer una consulta adicional por cada uno.
       const res = await StoreAPI.listSales('all', true, 500);
-      const items = (res.items || []).filter(x => normStatus_(x.status) !== 'cancelled');
+      const items = res.items || [];
 
       const orders = items.map(x => ({
         id: String(x.id || '').trim(),
         created_at: x.created_at || '',
         customer_id: x.customer_id || '',
+        customer_phone: x.customer_phone || '',
+        lead_id: x.lead_id || '',
         payment_method: x.payment_method || '',
         total_cop: toInt(x.total_cop),
         notes: x.notes || '',
@@ -991,7 +1035,7 @@ export function boot() {
 
   function ordersFilterValue_() {
     const v = String(el.ordersFilter?.value || 'open');
-    return ['open', 'paid', 'all'].includes(v) ? v : 'open';
+    return ['open', 'pending', 'installments', 'paid', 'cancelled', 'all'].includes(v) ? v : 'open';
   }
 
   function renderOrders_() {
@@ -1002,10 +1046,14 @@ export function boot() {
     const filter = ordersFilterValue_();
     const rows = all.filter(o => {
       const s = normStatus_(o.status);
-      if (filter === 'open') return s === 'pending' || s === 'installments';
-      if (filter === 'paid') return s === 'paid';
-      return true;
+      const statusMatch = filter === 'open' ? ['pending', 'installments'].includes(s) : filter === 'all' || filter === s;
+      const products = (o.items || []).map(it => State.productsIndex().get(it.product_id)?.name || it.product_id).join(' ');
+      return statusMatch && matchesSearch_([o.customer_id, o.customer_phone, o.created_by, o.id, o.notes, products], el.ordersSearch?.value);
     });
+    if (el.salesSummary) {
+      const due = rows.filter(o => normStatus_(o.status) === 'installments').reduce((sum, o) => sum + Math.max(0, toInt(o.balance_cop)), 0);
+      el.salesSummary.innerHTML = `<span><strong>${rows.length}</strong> registros en esta vista</span><span>Total mostrado: <strong>${escapeHtml(fmtCOP(rows.reduce((sum, o) => sum + toInt(o.total_cop), 0)))}</strong></span><span>Saldo de cuotas: <strong>${escapeHtml(fmtCOP(due))}</strong></span>`;
+    }
 
     if (!rows.length) {
       el.ordersBody.innerHTML = `<tr><td colspan="${Roles.isAdmin() ? 6 : 5}" class="muted">No hay ventas en este filtro.</td></tr>`;
@@ -1033,7 +1081,7 @@ export function boot() {
       const oid = escapeHtml(String(o.id || ''));
       const balance = toInt(o.balance_cop);
 
-      const openBtn = (status !== 'paid')
+      const openBtn = status === 'pending'
         ? `<button class="btn btn--tiny btn--ghost" data-order-open="${oid}">Abrir</button>` : '';
       const payBtn = status === 'installments'
         ? `<button class="btn btn--tiny btn--primary" data-order-payment="${oid}">Abonar</button>`
@@ -1042,7 +1090,9 @@ export function boot() {
           : '');
       const detailBtn = isApi
         ? `<button class="btn btn--tiny btn--ghost" data-order-detail="${oid}">✏️ Editar</button>` : '';
-      const delBtn = isApi
+      const cancelBtn = isApi && status !== 'cancelled' && (status === 'pending' || Roles.isAdmin())
+        ? `<button type="button" class="btn btn--tiny btn--ghost" data-order-cancel="${oid}">Cancelar</button>` : '';
+      const delBtn = !Roles.can('delete_sales') ? '' : isApi
         ? `<button class="btn btn--tiny btn--ghost" data-order-delete="${oid}" title="Eliminar venta" style="color:#b42318;">Eliminar</button>`
         : `<button class="btn btn--tiny btn--ghost" data-order-del="${oid}">Eliminar</button>`;
 
@@ -1050,7 +1100,7 @@ export function boot() {
         ? `<span class="orderBalance">Saldo: ${escapeHtml(fmtCOP(balance))}</span>`
         : (status === 'paid'
           ? `<span class="orderStatus">Pagada ✅</span>`
-          : `<span class="orderStatus">Pedido por confirmar</span>`);
+          : status === 'cancelled' ? '<span class="badge badge--off">Cancelada</span>' : `<span class="orderStatus">Pedido por confirmar</span>`);
 
       return `
         <tr>
@@ -1058,15 +1108,16 @@ export function boot() {
             <div>${escapeHtml(fmtDatePart_(o.created_at))}</div>
             <div class="muted mono">${escapeHtml(fmtTimePart_(o.created_at))}</div>
           </td>
-          <td>${escapeHtml(cust)}</td>
+          <td><div class="cellTitle">${escapeHtml(cust)}</div>${waLink_(o.customer_phone) ? `<a class="tiny contactLink" href="${escapeHtml(waLink_(o.customer_phone))}" target="_blank" rel="noopener noreferrer">WhatsApp ↗</a>` : ''}<div class="tiny muted orderProducts">${escapeHtml((o.items || []).map(it => `${toInt(it.qty)} × ${State.productsIndex().get(it.product_id)?.name || it.product_id}`).join(' · '))}</div></td>
           ${actorCell}
           <td class="num mono">${escapeHtml(total)}</td>
           <td class="tiny">${escapeHtml(notes)}${notes ? '<br>' : ''}${statusLine}</td>
-          <td class="num" style="white-space:nowrap;">
-            <div class="row" style="gap:8px; justify-content:flex-end;">
+          <td class="num actionsCell">
+            <div class="row" style="gap:8px; justify-content:flex-end;flex-wrap:wrap;">
               ${openBtn}
               ${payBtn}
               ${detailBtn}
+              ${cancelBtn}
               ${delBtn}
             </div>
           </td>
@@ -1113,6 +1164,8 @@ export function boot() {
       id: String(sale.id || key).trim(),
       created_at: sale.created_at || '',
       customer_id: sale.customer_id || '',
+      customer_phone: sale.customer_phone || '',
+      lead_id: sale.lead_id || '',
       payment_method: sale.payment_method || '',
       total_cop: toInt(sale.total_cop),
       notes: sale.notes || '',
@@ -1136,11 +1189,15 @@ export function boot() {
 
     const idx = State.productsIndex();
     State.openSale();
+    SALE_SOURCE.id = String(order.id || '');
+    LEAD_LINK.leadId = String(order.lead_id || '');
 
     if (el.saleCustomer) el.saleCustomer.value = String(order.customer_id || '').trim();
+    if (el.saleCustomerPhone) el.saleCustomerPhone.value = String(order.customer_phone || '').trim();
     if (el.salePay) el.salePay.value = String(order.payment_method || 'cash').trim() || 'cash';
     if (el.saleNotes) el.saleNotes.value = String(order.notes || '').trim();
     if (el.saleStatus) el.saleStatus.value = String(forceStatus || order.status || 'pending').trim();
+    syncInstallmentFields_();
 
     const items = order.items.map(it => {
       const pid = String(it.product_id || '').trim();
@@ -1208,6 +1265,7 @@ export function boot() {
     dashboardLoadedAt: 0,
     ordersLoadedAt: 0,
     productsSig: '',
+    errors: {},
   };
 
   function markSync_() {
@@ -1250,7 +1308,11 @@ export function boot() {
       }
 
       LOAD.productsLoadedAt = Date.now();
-    })().finally(() => { LOAD.productsInflight = null; });
+      delete LOAD.errors.products;
+    })().catch(error => {
+      LOAD.errors.products = 'No se pudo actualizar el catálogo.';
+      throw error;
+    }).finally(() => { LOAD.productsInflight = null; });
 
     return LOAD.productsInflight;
   }
@@ -1264,7 +1326,11 @@ export function boot() {
       State.setInventory(Array.isArray(res?.items) ? res.items : []);
       buildInventoryProductDatalist_();
       LOAD.inventoryLoadedAt = Date.now();
-    })().finally(() => { LOAD.inventoryInflight = null; });
+      delete LOAD.errors.inventory;
+    })().catch(error => {
+      LOAD.errors.inventory = 'No se pudo actualizar el inventario.';
+      throw error;
+    }).finally(() => { LOAD.inventoryInflight = null; });
 
     return LOAD.inventoryInflight;
   }
@@ -1320,6 +1386,7 @@ export function boot() {
   async function refreshAfterProductChange_() {
     await Promise.allSettled([
       ensureProductsLoaded_(true),
+      ensureInventoryLoaded_(true),
       ensureCostsLoaded_(true),
       ensureDashboardLoaded_(true),
     ]);
@@ -1351,8 +1418,8 @@ export function boot() {
       syncSalesUI_();
 
       const tab = currentTab_();
-      const wantsProducts = ['catalog', 'sales', 'restock'].includes(tab);
-      const wantsInventory = ['inventory', 'dashboard'].includes(tab);
+      const wantsProducts = true;
+      const wantsInventory = true;
 
       // Los interesados se cargan siempre: el contador de la pestaña ("por
       // contactar") debe estar bien aunque no estés parada en esa sección.
@@ -1362,9 +1429,9 @@ export function boot() {
 
       await Promise.allSettled(tasks);
 
-      markSync_();
+      if (!Object.keys(LOAD.errors).length && !State.get().ordersLoadError && !LEADS_LOAD.error) markSync_();
       renderActive_();
-      setNet(true, 'Conectado');
+      setNet(navigator.onLine, navigator.onLine ? 'Conectado' : 'Sin conexión');
     } catch (e) {
       fatal_(e?.message || String(e));
       setNet(false, 'API error');
@@ -1385,6 +1452,7 @@ export function boot() {
       renderKPIs_();
 
       renderLeadsBadge_();
+      renderOperations_();
 
       const tab = currentTab_();
       if (tab === 'catalog') renderCatalog_();
@@ -1407,6 +1475,79 @@ export function boot() {
     if (el.kpiProducts) el.kpiProducts.textContent = String(productsCount || 0);
     if (el.kpiLowStock) el.kpiLowStock.textContent = st.dashboard ? String(low) : '—';
     if (el.dashToday) el.dashToday.textContent = st.dashboard ? fmtCOP(toInt(dash.today_total_cop)) : '—';
+  }
+
+  function renderOperations_() {
+    const st = State.get();
+    const inv = Array.isArray(st.inventory) ? st.inventory : [];
+    const activeIds = new Set((st.products || []).filter(p => p.active !== false).map(p => String(p.id)));
+    const low = inv.filter(r => activeIds.has(String(r.product_id)) && toInt(r.min_stock) > 0 && toInt(r.stock) <= toInt(r.min_stock)).length;
+    if (el.kpiLowStock) el.kpiLowStock.textContent = LOAD.inventoryLoadedAt ? String(low) : '—';
+    const orders = st.orders || [];
+    const open = orders.filter(o => normStatus_(o.status) === 'pending');
+    const installments = orders.filter(o => normStatus_(o.status) === 'installments');
+    const noPhoto = (st.products || []).filter(p => p.active !== false && !imageUrl_(p.image_url)).length;
+    if (el.opsSummary) el.opsSummary.innerHTML = [
+      ['leads', LEADS_LOAD.loadedOnce ? leadsDueCount_() : '—', 'Por contactar', 'Hoy y contactos atrasados', '↗'],
+      ['orders', st.ordersHydrated ? open.length : '—', 'Pedidos pendientes', 'Propuestas por confirmar', '▤'],
+      ['payments', st.ordersHydrated ? installments.length : '—', 'Ventas a cuotas', 'Consulta el saldo y los abonos', '$'],
+      ['low', LOAD.inventoryLoadedAt ? low : '—', 'Reponer existencias', 'Productos en el mínimo o por debajo', '↓'],
+      ['photos', LOAD.productsLoadedAt ? noPhoto : '—', 'Completar fotos', 'Haz más fácil mostrar el producto', '▧'],
+    ].map(([action, number, title, subtitle, icon]) => `<button type="button" class="opsTile" data-store-action="${action}"><span class="opsTile__icon" aria-hidden="true">${icon}</span><span class="opsTile__number">${number}</span><span class="opsTile__label">${title}</span><span class="opsTile__hint">${subtitle}</span></button>`).join('');
+    if (el.storeSyncStatus) el.storeSyncStatus.textContent = st.lastSync ? `Última actualización: ${fmtDateTime_(st.lastSync)}` : 'Cargando la información del equipo…';
+    const errors = [...Object.values(LOAD.errors), LEADS_LOAD.error, st.ordersLoadError ? 'No se pudieron leer las ventas compartidas; se muestran datos de este dispositivo.' : ''].filter(Boolean);
+    if (el.storeDataNotice) {
+      el.storeDataNotice.hidden = !errors.length;
+      el.storeDataNotice.textContent = `${errors.join(' ')} Los datos visibles pueden estar desactualizados. Revisa la conexión y pulsa Actualizar.`;
+    }
+  }
+
+  function productStock_(product) {
+    const inv = inventoryByProductId_(product?.id);
+    return inv && !LOAD.errors.inventory ? toInt(inv.stock) : null;
+  }
+  function stockBadgeHtml_(p) {
+    const stock = productStock_(p);
+    if (p.active === false) return '<span class="badge badge--off">Oculto</span>';
+    if (stock === null) return '<span class="badge badge--warn">Stock por confirmar</span>';
+    const min = toInt(inventoryByProductId_(p.id)?.min_stock);
+    return `<span class="badge ${stock <= 0 || (min > 0 && stock <= min) ? 'badge--warn' : ''}">${stock > 0 ? `${stock} disponible${stock === 1 ? '' : 's'}` : 'Sin existencias'}${min > 0 && stock > 0 && stock <= min ? ' · bajo' : ''}</span>`;
+  }
+
+  const TABLE_SORT = { key: '', direction: 1 };
+  function filteredCatalog_() {
+    const src = (State.get().products || []).filter(Boolean);
+    let category = el.catalogCategory?.value || '';
+    const categories = [...new Set(src.map(p => safeStr_(p.category, 160)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+    if (el.catalogCategory) {
+      el.catalogCategory.innerHTML = '<option value="">Todas las categorías</option>' + categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      el.catalogCategory.value = categories.includes(category) ? category : '';
+      category = el.catalogCategory.value;
+    }
+    if (el.productCategories) el.productCategories.innerHTML = [...new Set(['Instrumentos', 'Accesorios', 'Arte', ...categories])].map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+    const availability = el.catalogAvailability?.value || 'all';
+    const status = el.catalogStatus?.value || 'active';
+    const rows = src.filter(p => {
+      const stock = productStock_(p);
+      const min = toInt(inventoryByProductId_(p.id)?.min_stock);
+      return matchesSearch_([p.id, p.name, p.brand, p.category, p.sku, p.desc, p.description], el.qCatalog?.value)
+        && (!category || p.category === category)
+        && (status === 'all' || (status === 'active' ? p.active !== false : p.active === false))
+        && (availability === 'all' || availability === 'available' && stock !== null && stock > 0
+          || availability === 'out' && stock === 0 || availability === 'low' && stock !== null && min > 0 && stock <= min
+          || availability === 'no-photo' && !imageUrl_(p.image_url))
+        && (!el.onlyMissingPrice?.checked || !pickPriceCOP_(p) || !(p.has_cost || pickCostCOP_(p) > 0));
+    });
+    const sort = el.catalogSort?.value || 'name';
+    rows.sort((a, b) => sort === 'price-asc' ? pickPriceCOP_(a) - pickPriceCOP_(b) : sort === 'price-desc' ? pickPriceCOP_(b) - pickPriceCOP_(a)
+      : sort === 'recent' ? String(b.updated_at?.toDate?.().toISOString() || b.updated_at || '').localeCompare(String(a.updated_at?.toDate?.().toISOString() || a.updated_at || ''))
+      : String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' }));
+    if (TABLE_SORT.key && el.catalogLayout?.value === 'table') rows.sort((a, b) => {
+      const value = p => TABLE_SORT.key === 'price' ? pickPriceCOP_(p) : TABLE_SORT.key === 'stock' ? productStock_(p) ?? -1 : TABLE_SORT.key === 'active' ? Number(p.active !== false) : searchKey_(p[TABLE_SORT.key]);
+      const x = value(a), y = value(b);
+      return TABLE_SORT.direction * (typeof x === 'number' ? x - y : x.localeCompare(y, 'es'));
+    });
+    return rows;
   }
 
   /* Utilidades: solo admin (necesita leer productCosts). */
@@ -1481,21 +1622,30 @@ export function boot() {
     const showCosts = Roles.can('see_costs');
     const colCount = 7 + (showCosts ? 2 : 0);
 
-    const src = Array.isArray(st.products) ? st.products : [];
-    let list = q
-      ? src.filter(p => p && (
-          String(p.id || '').toLowerCase().includes(q) ||
-          String(p.name || '').toLowerCase().includes(q) ||
-          String(p.brand || '').toLowerCase().includes(q) ||
-          String(p.category || '').toLowerCase().includes(q) ||
-          String(p.sku || '').toLowerCase().includes(q)
-        ))
-      : src;
-
-    // ✅ Filtro "solo pendientes": lo que aún no tiene precio o no tiene costo.
-    if (el.onlyMissingPrice?.checked) {
-      list = list.filter(p => !pickPriceCOP_(p) || !(p?.has_cost || pickCostCOP_(p) > 0));
+    const list = filteredCatalog_();
+    const cards = el.catalogLayout?.value !== 'table';
+    if (el.catalogGrid) {
+      el.catalogGrid.hidden = !cards;
+      el.catalogGrid.innerHTML = list.length ? list.map(p => {
+        const photo = imageUrl_(p.image_url);
+        const price = pickPriceCOP_(p);
+        const productId = escapeHtml(p.id);
+        return `<article class="catalogProduct">
+          <button type="button" class="catalogProduct__photo" data-act="share" data-id="${productId}" aria-label="Ver ficha de ${escapeHtml(p.name)}">
+            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(p.name)}" loading="lazy" />` : '<span class="catalogProduct__placeholder"><span aria-hidden="true">♫</span>Sin foto</span>'}
+          </button>
+          <div class="catalogProduct__body"><div class="eyebrow">${escapeHtml(p.category || 'PRODUCTO')}</div>
+            <h3><button type="button" class="textButton" data-act="share" data-id="${productId}">${escapeHtml(p.name || p.id)}</button></h3>
+            <p class="tiny muted">${escapeHtml([p.brand, p.sku ? `SKU ${p.sku}` : ''].filter(Boolean).join(' · ') || 'Musicala Store')}</p>
+            <div class="catalogProduct__price">${price > 0 ? escapeHtml(fmtCOP(price)) : 'Precio por definir'}</div>
+            ${stockBadgeHtml_(p)}
+            <p class="catalogProduct__description">${escapeHtml(p.desc || p.description || 'Abre la ficha para conocer y compartir este producto.')}</p>
+            <div class="catalogProduct__actions"><button class="btn btn--primary" type="button" data-act="share" data-id="${productId}">Ver ficha</button><button class="btn btn--ghost" type="button" data-act="sell" data-id="${productId}" ${p.active === false ? 'disabled' : ''}>+ Venta</button><button class="btn btn--ghost" type="button" data-act="edit" data-id="${productId}">Editar</button></div>
+          </div></article>`;
+      }).join('') : '<div class="catalogEmpty"><span aria-hidden="true">⌕</span><h3>No hay productos con estos filtros</h3><p class="muted">Prueba otro término o limpia los filtros para ver el catálogo.</p><button class="btn btn--ghost" type="button" data-store-action="reset-catalog">Limpiar filtros</button></div>';
     }
+    if (el.catalogTableWrap) el.catalogTableWrap.hidden = cards;
+    if (el.catalogMeta) el.catalogMeta.textContent = `${list.length} de ${(st.products || []).length} productos · ${cards ? 'Abre una ficha para ver, compartir o vender.' : 'Vista de gestión con precios e inventario.'}`;
 
     if (!list.length) {
       el.catalogBody.innerHTML = `<tr><td colspan="${colCount}" class="muted">No hay resultados.</td></tr>`;
@@ -1508,9 +1658,9 @@ export function boot() {
         ? `<span class="badge">Activo</span>`
         : `<span class="badge badge--off">Oculto</span>`;
 
-      const stock = toInt(p.stock);
-      const minStock = toInt(p.min_stock);
-      const stockBadge = (minStock > 0 && stock <= minStock)
+      const stock = productStock_(p);
+      const minStock = toInt(inventoryByProductId_(p.id)?.min_stock);
+      const stockBadge = (stock !== null && minStock > 0 && stock <= minStock)
         ? `<span class="badge badge--warn">Bajo</span>`
         : '';
 
@@ -1557,7 +1707,7 @@ export function boot() {
           <td>${escapeHtml(p.category || '')}</td>
           <td class="num mono">${priceCell}${missingCostBadge}</td>
           ${costCells}
-          <td class="num mono">${toInt(stock)} ${stockBadge}</td>
+          <td class="num mono">${stock === null ? '—' : stock} ${stockBadge}</td>
           <td>${badge}</td>
           <td class="num actionsCell">
             <button class="btn btn--tiny btn--primary" data-act="share" data-id="${escapeHtml(p.id)}">Ficha</button>
@@ -1641,7 +1791,7 @@ export function boot() {
           <td class="num mono">${toInt(r.stock)}</td>
           <td class="num mono">${toInt(r.min_stock)}</td>
           <td>${escapeHtml(r.location || '')}</td>
-          <td class="tiny muted">${escapeHtml(String(r.updated_at || ''))}</td>
+          <td class="tiny muted">${escapeHtml(fmtDateTime_(r.updated_at))}</td>
           <td class="num actionsCell">${actions}</td>
         </tr>
       `;
@@ -1728,10 +1878,12 @@ export function boot() {
   ========================= */
   function openNewSale_() {
     State.openSale();
+    SALE_SOURCE.id = '';
     // Venta nueva "limpia": si venía de un interesado, quien la abre lo vuelve a enlazar.
     LEAD_LINK.leadId = '';
     if (el.saleSearch) el.saleSearch.value = '';
     if (el.saleCustomer) el.saleCustomer.value = '';
+    if (el.saleCustomerPhone) el.saleCustomerPhone.value = '';
     if (el.saleNotes) el.saleNotes.value = '';
     if (el.salePay) el.salePay.value = 'cash';
     if (el.saleStatus) el.saleStatus.value = 'paid';
@@ -1743,6 +1895,7 @@ export function boot() {
 
   function closeSale_() {
     State.closeSale();
+    SALE_SOURCE.id = '';
     LEAD_LINK.leadId = '';
     scheduleSaleRender_();
     syncSalesUI_();
@@ -1820,7 +1973,7 @@ export function boot() {
     if (!s) return '';
 
     const pid = parseProductIdFromInput_(s);
-    if (pid) return pid;
+    if (pid && State.productsIndex().has(pid)) return pid;
 
     const needle = s.toLowerCase();
     const invExact = (Array.isArray(State.get().inventory) ? State.get().inventory : [])
@@ -1835,13 +1988,8 @@ export function boot() {
     const exactName = list.find(p => String(p?.name || '').trim().toLowerCase() === needle);
     if (exactName) return String(exactName.id || '').trim();
 
-    const partial = list.find(p =>
-      String(p?.name || '').toLowerCase().includes(needle) ||
-      String(p?.brand || '').toLowerCase().includes(needle) ||
-      String(p?.sku || '').toLowerCase().includes(needle) ||
-      String(p?.category || '').toLowerCase().includes(needle)
-    );
-    return partial ? String(partial.id || '').trim() : '';
+    const candidates = list.filter(p => matchesSearch_([p?.name, p?.brand, p?.sku, p?.category], s));
+    return candidates.length === 1 ? String(candidates[0].id || '').trim() : '';
   }
 
   function renderStockProductPreview_(productId) {
@@ -1912,19 +2060,19 @@ export function boot() {
     const exact = list.find(p => String(p.id || '').toLowerCase() === needle);
     if (exact) return exact;
 
-    return list.find(p =>
-      String(p.name || '').toLowerCase().includes(needle) ||
-      String(p.brand || '').toLowerCase().includes(needle) ||
-      String(p.sku || '').toLowerCase().includes(needle) ||
-      String(p.category || '').toLowerCase().includes(needle)
-    ) || null;
+    const exactName = list.filter(p => p.active !== false && [p.name, p.sku].some(v => searchKey_(v) === searchKey_(q)));
+    if (exactName.length === 1) return exactName[0];
+    const matches = list.filter(p => p.active !== false && matchesSearch_([p.name, p.brand, p.sku, p.category, p.desc], q));
+    return matches.length === 1 ? matches[0] : null;
   }
 
   function addToSale_() {
     const q = el.saleSearch?.value || '';
     const p = findProductByQuery_(q);
 
-    if (!p) { toast('No encontré ese producto', false); return; }
+    if (!p) { toast('Selecciona el producto exacto de la lista o agrégalo desde su ficha.', false); return; }
+    if (p.active === false) { toast('Este producto está oculto. Actívalo para venderlo.', false); return; }
+    if (pickPriceCOP_(p) <= 0) { toast('Completa el precio del producto antes de venderlo.', false); return; }
 
     const st = State.get();
     const pid = String(p.id || '').trim();
@@ -1941,6 +2089,21 @@ export function boot() {
 
     if (el.saleSearch) el.saleSearch.value = '';
     scheduleSaleRender_();
+  }
+
+  function addProductToSale_(p) {
+    if (!p || p.active === false) { toast('Activa el producto antes de agregarlo a una venta.', false); return; }
+    if (pickPriceCOP_(p) <= 0) { toast('Completa el precio de venta de este producto primero.', false); return; }
+    if (!State.get().saleOpen) openNewSale_();
+    showTab('sales');
+    if (productStock_(p) === 0 && el.saleStatus) {
+      el.saleStatus.value = 'pending';
+      syncInstallmentFields_();
+    }
+    if (el.saleSearch) el.saleSearch.value = buildProductOptionLabel_(p);
+    addToSale_();
+    toast(productStock_(p) === 0 ? 'Agregado como pedido pendiente: confirma disponibilidad antes de cobrar.' : 'Producto agregado al carrito ✅', true);
+    el.salePane?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   let SALE_RAF = 0;
@@ -1983,7 +2146,7 @@ export function boot() {
 
       return `
         <tr>
-          <td>${escapeHtml(it.name || it.product_id)}</td>
+          <td><div class="cellTitle">${escapeHtml(it.name || it.product_id)}</div><div class="tiny muted">${stockBadgeHtml_(State.productsIndex().get(String(it.product_id)) || { id: it.product_id })}</div></td>
           <td class="num mono">
             <input class="miniNum" type="number" min="1" step="1" value="${qty}" data-sale-qty="${idx}" />
           </td>
@@ -2015,6 +2178,8 @@ export function boot() {
 
     const sale = {
       customer_id: safeStr_(el.saleCustomer?.value, 180),
+      customer_phone: safeStr_(el.saleCustomerPhone?.value, 40),
+      lead_id: LEAD_LINK.leadId,
       payment_method: safeStr_(el.salePay?.value, 40),
       status: normStatus_(String(el.saleStatus?.value || 'paid').trim()),
       notes: safeStr_(el.saleNotes?.value, 1200),
@@ -2030,15 +2195,20 @@ export function boot() {
 
     setBusy_(true, sale.status === 'pending' ? 'Guardando pedido…' : 'Guardando venta…');
     try {
-      const res = await apiPostAuthed_({ action: 'sale.create', sale, items });
+      const res = SALE_SOURCE.id && !SALE_SOURCE.id.startsWith('local_')
+        ? await StoreAPI.savePendingSale(SALE_SOURCE.id, { sale, items })
+        : await apiPostAuthed_({ action: 'sale.create', sale, items });
 
       if (sale.status === 'pending') {
         const local = readLocalOrders_();
         const id = String(res?.id || ('local_' + Date.now() + '_' + Math.random().toString(16).slice(2)));
-        local.unshift({
+        const nextLocal = local.filter(o => String(o.id) !== id);
+        nextLocal.unshift({
           id,
           created_at: new Date().toISOString(),
           customer_id: sale.customer_id || '',
+          customer_phone: sale.customer_phone || '',
+          lead_id: sale.lead_id || '',
           payment_method: sale.payment_method || '',
           status: 'pending',
           notes: sale.notes || '',
@@ -2052,14 +2222,15 @@ export function boot() {
           })).filter(x => x.product_id && x.qty > 0),
           source: 'local',
         });
-        writeLocalOrders_(local.slice(0, 200));
+        writeLocalOrders_(nextLocal.slice(0, 200));
       }
+      if (SALE_SOURCE.id && sale.status !== 'pending') writeLocalOrders_(readLocalOrders_().filter(o => String(o.id) !== SALE_SOURCE.id));
 
       toast(`${sale.status === 'pending' ? 'Pedido' : 'Venta'} guardada ✅ (${fmtCOP(toInt(res?.total_cop ?? computedTotal))})`, true);
 
       const pendingLeadId = LEAD_LINK.leadId; // closeSale_ lo limpia
       closeSale_();
-      if (pendingLeadId) await closeLeadAfterSale_(res?.id, pendingLeadId);
+      if (pendingLeadId && ['paid', 'installments'].includes(res?.status || sale.status)) await closeLeadAfterSale_(res?.id, pendingLeadId);
 
       await refreshAfterSale_();
     } catch (e) {
@@ -2076,10 +2247,13 @@ export function boot() {
 
     const st = State.get();
 
-    if (st.ordersSource === 'api') {
+    if (st.ordersSource === 'api' || !key.startsWith('local_')) {
       setBusy_(true, 'Marcando pagado…');
       try {
         await apiPostAuthed_({ action: 'sale.updateStatus', id: key, status: 'paid' });
+        writeLocalOrders_(readLocalOrders_().filter(o => String(o.id) !== key));
+        const linkedLead = (st.orders || []).find(o => String(o.id) === key)?.lead_id;
+        if (linkedLead) await closeLeadAfterSale_(key, linkedLead);
         toast('Pedido convertido a pagado ✅', true);
         await refreshAfterOrderPaid_();
         return;
@@ -2127,6 +2301,22 @@ export function boot() {
     }
   }
 
+  async function cancelOrder_(id) {
+    const order = (State.get().orders || []).find(o => String(o.id) === String(id));
+    if (!order) return;
+    if (order.status !== 'pending' && !Roles.isAdmin()) { toast('Solo admin puede cancelar una venta confirmada.', false); return; }
+    const paymentNote = toInt(order.paid_cop) > 0 ? '\nLos abonos quedan registrados. Cualquier devolución de dinero debe gestionarse por separado.' : '';
+    if (!confirm(`¿Cancelar este registro de ${order.customer_id || 'cliente sin nombre'}?\nSi descontó inventario, las existencias se devolverán.${paymentNote}`)) return;
+    setBusy_(true, 'Cancelando registro…');
+    try {
+      await StoreAPI.updateSaleStatus(id, 'cancelled', Roles.email());
+      writeLocalOrders_(readLocalOrders_().filter(o => String(o.id) !== String(id)));
+      await refreshAfterOrderPaid_();
+      toast('Registro cancelado; se conservan sus datos y abonos.', true);
+    } catch (error) { toast(error?.message || 'No pude cancelar el registro.', false); }
+    finally { setBusy_(false); }
+  }
+
   async function addInstallmentPayment_(id) {
     const order = State.get().orders.find(x => String(x.id) === String(id));
     const balance = toInt(order?.balance_cop);
@@ -2134,7 +2324,7 @@ export function boot() {
     if (raw === null) return;
     const amount = toInt(String(raw).replace(/[^0-9]/g, ''));
     setBusy_(true, 'Registrando abono…');
-    try { await StoreAPI.addPayment(id, amount, order?.payment_method || 'cash'); toast('Abono registrado ✅', true); await refreshAfterOrderPaid_(); }
+    try { await StoreAPI.addPayment(id, amount, order?.payment_method || 'cash', '', Roles.email()); toast('Abono registrado ✅', true); if (order?.lead_id) await closeLeadAfterSale_(id, order.lead_id); await refreshAfterOrderPaid_(); }
     catch (e) { toast(e?.message || String(e), false); }
     finally { setBusy_(false); }
   }
@@ -2283,10 +2473,9 @@ export function boot() {
   }
 
   async function copyText_(text) {
-    if (!text) throw new Error('Selecciona al menos un carrito para cotizar.');
+    if (!text) throw new Error('No hay información para copiar.');
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
+      try { await navigator.clipboard.writeText(text); return; } catch {}
     }
 
     const area = document.createElement('textarea');
@@ -2294,7 +2483,9 @@ export function boot() {
     area.setAttribute('readonly', '');
     area.style.position = 'fixed';
     area.style.opacity = '0';
-    document.body.appendChild(area);
+    const host = document.querySelector('dialog[open]:last-of-type') || document.body;
+    host.appendChild(area);
+    area.focus();
     area.select();
     const ok = document.execCommand('copy');
     area.remove();
@@ -2537,6 +2728,9 @@ export function boot() {
     }
 
     if (el.sd_addPaymentRow) el.sd_addPaymentRow.hidden = (balance <= 0);
+    if (el.sd_addPaymentRow) el.sd_addPaymentRow.hidden = balance <= 0 || sale.status === 'cancelled';
+    if (el.btnDeleteSale) el.btnDeleteSale.hidden = !Roles.can('delete_sales');
+    if (el.sd_phone) el.sd_phone.value = sale.customer_phone || '';
     if (el.sd_newPayment) el.sd_newPayment.value = '';
   }
 
@@ -2580,8 +2774,10 @@ export function boot() {
     try {
       await StoreAPI.updateSale(key, {
         customer_id: safeStr_(el.sd_customer?.value, 180),
+        customer_phone: safeStr_(el.sd_phone?.value, 40),
         payment_method: safeStr_(el.sd_pay?.value, 40),
         notes: safeStr_(el.sd_notes?.value, 1200),
+        updated_by: Roles.email(),
       });
       toast('Venta actualizada ✅', true);
       await reloadSaleDetail_();
@@ -2594,6 +2790,7 @@ export function boot() {
   }
 
   async function deleteSaleDetail_(id) {
+    if (!Roles.can('delete_sales')) { toast('Solo admin puede eliminar ventas.', false); return; }
     const key = String(id || SALE_DETAIL.id || '').trim();
     if (!key) return;
 
@@ -2602,7 +2799,7 @@ export function boot() {
 
     setBusy_(true, 'Eliminando venta…');
     try {
-      await StoreAPI.deleteSale(key);
+      await StoreAPI.deleteSale(key, Roles.email());
       toast('Venta eliminada 🗑️ (stock devuelto si aplicaba)', true);
       if (el.modalSaleDetail?.open) el.modalSaleDetail.close();
       SALE_DETAIL.id = ''; SALE_DETAIL.sale = null;
@@ -2627,7 +2824,7 @@ export function boot() {
 
     setBusy_(true, 'Actualizando abono…');
     try {
-      await StoreAPI.updatePayment(SALE_DETAIL.id, index, { amount });
+      await StoreAPI.updatePayment(SALE_DETAIL.id, index, { amount, updatedBy: Roles.email() });
       toast('Abono actualizado ✅', true);
       await reloadSaleDetail_();
       await refreshAfterOrderPaid_();
@@ -2649,7 +2846,7 @@ export function boot() {
 
     setBusy_(true, 'Eliminando abono…');
     try {
-      await StoreAPI.deletePayment(SALE_DETAIL.id, index);
+      await StoreAPI.deletePayment(SALE_DETAIL.id, index, Roles.email());
       toast('Abono eliminado 🗑️', true);
       await reloadSaleDetail_();
       await refreshAfterOrderPaid_();
@@ -2668,7 +2865,8 @@ export function boot() {
 
     setBusy_(true, 'Registrando abono…');
     try {
-      await StoreAPI.addPayment(key, amount, SALE_DETAIL.sale?.payment_method || 'cash');
+      await StoreAPI.addPayment(key, amount, SALE_DETAIL.sale?.payment_method || 'cash', '', Roles.email());
+      if (SALE_DETAIL.sale?.lead_id) await closeLeadAfterSale_(key, SALE_DETAIL.sale.lead_id);
       toast('Abono registrado ✅', true);
       await reloadSaleDetail_();
       await refreshAfterOrderPaid_();
@@ -2886,7 +3084,7 @@ export function boot() {
 
   function renderProductImagePreview_(url) {
     if (!el.p_image_preview) return;
-    const src = safeStr_(url, 2000);
+    const src = String(url || '').startsWith('blob:') ? url : imageUrl_(url);
     el.p_image_preview.hidden = !src;
     el.p_image_preview.innerHTML = src
       ? `<img src="${escapeHtml(src)}" alt="Vista previa de la foto del producto" />`
@@ -2919,17 +3117,45 @@ export function boot() {
       p?.brand ? `Marca: ${safeStr_(p.brand, 160)}` : '',
       p?.category ? `Categoría: ${safeStr_(p.category, 160)}` : '',
       pickPriceCOP_(p) > 0 ? `Precio: ${fmtCOP(pickPriceCOP_(p))}` : '',
-      p?.desc ? `\n${safeStr_(p.desc, 4000)}` : '',
-      p?.image_url ? `\nFoto: ${safeStr_(p.image_url, 1200)}` : '',
+      p?.desc || p?.description ? `\n${safeStr_(p.desc || p.description, 4000)}` : '',
+      imageUrl_(p?.image_url) ? `\nFoto: ${imageUrl_(p.image_url)}` : '',
     ].filter(Boolean);
     return lines.join('\n');
   }
 
   let sharingProduct_ = null;
+  let productPhotoFile_ = null;
+  let productPhotoPromise_ = null;
+  let imagePreviewObjectUrl_ = '';
+  function resetImagePreview_() {
+    if (imagePreviewObjectUrl_) URL.revokeObjectURL(imagePreviewObjectUrl_);
+    imagePreviewObjectUrl_ = '';
+  }
+  async function loadProductPhoto_(p) {
+    const url = imageUrl_(p?.image_url);
+    if (!url) throw new Error('Este producto no tiene una foto guardada.');
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error('No pude descargar la imagen. Revisa su enlace o vuelve a subirla.');
+    const blob = await res.blob();
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(blob.type)) throw new Error('El enlace no contiene una imagen JPG, PNG o WEBP.');
+    return new File([blob], `foto-${slug_(p.name) || 'producto'}.${extensionForImage_(blob)}`, { type: blob.type });
+  }
   function openProductShare_(p) {
     if (!p) { toast('No encontré ese producto', false); return; }
     sharingProduct_ = p;
-    const photo = safeStr_(p.image_url, 1200);
+    productPhotoFile_ = null;
+    const photo = imageUrl_(p.image_url);
+    if (el.btnProductPhoto) el.btnProductPhoto.disabled = !photo;
+    if (el.btnProductDownload) el.btnProductDownload.disabled = !photo;
+    if (el.btnProductSell) el.btnProductSell.disabled = p.active === false || pickPriceCOP_(p) <= 0;
+    if (el.btnProductShare) el.btnProductShare.textContent = 'Compartir ficha';
+    productPhotoPromise_ = photo ? loadProductPhoto_(p).then(file => {
+      if (sharingProduct_ === p) {
+        productPhotoFile_ = file;
+        if (el.btnProductShare && navigator.canShare?.({ files: [file] })) el.btnProductShare.textContent = 'Enviar ficha y foto';
+      }
+      return file;
+    }).catch(() => null) : Promise.resolve(null);
     const meta = [p.brand, p.category, p.sku ? `SKU: ${p.sku}` : ''].filter(Boolean).join(' · ');
     if (el.productShareContent) el.productShareContent.innerHTML = `
       <div class="productShareHero">
@@ -2938,7 +3164,9 @@ export function boot() {
           <h3 class="h3">${escapeHtml(p.name || 'Producto')}</h3>
           ${meta ? `<p class="muted tiny">${escapeHtml(meta)}</p>` : ''}
           ${pickPriceCOP_(p) > 0 ? `<p class="h2" style="margin:10px 0;">${escapeHtml(fmtCOP(pickPriceCOP_(p)))}</p>` : ''}
-          ${p.desc ? `<p class="productShareHero__desc">${escapeHtml(p.desc)}</p>` : ''}
+          <div class="productAvailability">${stockBadgeHtml_(p)}</div>
+          ${inventoryByProductId_(p.id)?.location ? `<p class="tiny muted">Ubicación interna: ${escapeHtml(inventoryByProductId_(p.id).location)}</p>` : ''}
+          ${p.desc || p.description ? `<p class="productShareHero__desc">${escapeHtml(p.desc || p.description)}</p>` : ''}
         </div>
       </div>`;
     el.modalProductShare?.showModal?.();
@@ -2955,17 +3183,9 @@ export function boot() {
     const p = sharingProduct_;
     const text = productShareText_(p);
     try {
-      let files = [];
-      if (p.image_url && navigator.canShare && navigator.share) {
-        const res = await fetch(p.image_url);
-        if (res.ok) {
-          const blob = await res.blob();
-          const file = new File([blob], `foto-${slug_(p.name) || 'producto'}.${blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg'}`, { type: blob.type });
-          if (navigator.canShare({ files: [file] })) files = [file];
-        }
-      }
+      const files = productPhotoFile_ && navigator.canShare?.({ files: [productPhotoFile_] }) ? [productPhotoFile_] : [];
       if (navigator.share) {
-        await navigator.share({ title: p.name || 'Producto Musicala', text, files });
+        await navigator.share({ title: p.name || 'Producto Musicala', text, ...(files.length ? { files } : {}) });
         return;
       }
     } catch (e) {
@@ -2973,6 +3193,42 @@ export function boot() {
       // Si el navegador no permite adjuntar la foto, sí dejamos la ficha lista.
     }
     await copyProductShare_();
+  }
+
+  async function downloadProductPhoto_() {
+    const file = productPhotoFile_ || await productPhotoPromise_;
+    if (!file) throw new Error('No pude preparar la foto. Vuelve a subirla al producto para descargarla.');
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url; link.download = file.name;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast('Foto descargada: lista para adjuntarla al cliente ✅', true);
+  }
+
+  async function photoPng_() {
+    const file = productPhotoFile_ || await productPhotoPromise_;
+    if (!file) throw new Error('No pude preparar la imagen. Vuelve a subirla al producto.');
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0); bitmap.close();
+    return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('No pude convertir la foto.')), 'image/png'));
+  }
+  async function copyProductPhoto_() {
+    if (!navigator.clipboard?.write || !globalThis.ClipboardItem) { await downloadProductPhoto_(); return; }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': photoPng_() })]);
+    toast('Foto copiada. Pégala en la conversación del cliente ✅', true);
+  }
+
+  function resetCatalogFilters_() {
+    TABLE_SORT.key = '';
+    if (el.qCatalog) el.qCatalog.value = '';
+    if (el.catalogCategory) el.catalogCategory.value = '';
+    if (el.catalogAvailability) el.catalogAvailability.value = 'all';
+    if (el.catalogStatus) el.catalogStatus.value = 'active';
+    if (el.onlyMissingPrice) el.onlyMissingPrice.checked = false;
+    renderCatalog_();
   }
 
   async function saveProduct_() {
@@ -2986,6 +3242,8 @@ export function boot() {
     }
 
     const imageFile = el.p_image_file?.files?.[0] || null;
+    if (!el.productForm?.reportValidity()) return;
+    if (!imageFile && prod.image_url && !imageUrl_(prod.image_url)) { toast('Usa un enlace válido para la foto.', false); return; }
 
     if (!prod.price_cop) {
       toast(
@@ -3003,6 +3261,7 @@ export function boot() {
     setBusy_(true, imageFile ? 'Subiendo foto y guardando producto…' : 'Guardando producto…');
     try {
       if (imageFile) prod.image_url = await uploadProductImage_(imageFile, prod.id);
+      if (imageFile && el.p_image) { el.p_image.value = prod.image_url; el.p_image_file.value = ''; renderProductImagePreview_(prod.image_url); }
       const res = await StoreAPI.upsertProduct(prod, {
         writeCost,
         includeCompetitor: Roles.can('see_competitor'),
@@ -3083,7 +3342,6 @@ export function boot() {
       const targetStock = rawQty;
       if (targetStock < 0) { toast('El stock real no puede ser negativo', false); return; }
       qty = targetStock - currentStock;
-      if (!qty) { toast('El stock ya está en ese valor', true); return; }
       if (!note) note = 'Conteo físico / ajuste a stock real';
     } else if (!qty) {
       toast('Cantidad inválida (no puede ser 0)', false);
@@ -3092,7 +3350,7 @@ export function boot() {
 
     setBusy_(true, 'Guardando inventario…');
     try {
-      const res = await StoreAPI.adjustStock({ product_id, type, qty, ref, note });
+      const res = await StoreAPI.adjustStock({ product_id, type, qty, ref, note, ...(mode === 'set' ? { target_stock: rawQty } : {}), updated_by: Roles.email() });
       const newStock = (res && res.stock !== undefined && res.stock !== null) ? toInt(res.stock) : currentStock + qty;
       toast(`Inventario actualizado. Nuevo stock: ${newStock}`, true);
       el.modalStock?.close?.();
@@ -3465,6 +3723,36 @@ export function boot() {
     });
 
     on(el.qCatalog, 'input', debounce(() => renderCatalog_(), 120));
+    [el.catalogCategory, el.catalogAvailability, el.catalogStatus, el.catalogSort, el.catalogLayout].forEach(field => on(field, 'change', () => { TABLE_SORT.key = ''; renderCatalog_(); }));
+    on($('tblCatalog'), 'click', ev => {
+      const key = ev.target.closest('[data-sort]')?.dataset.sort;
+      if (!key) return;
+      TABLE_SORT.direction = TABLE_SORT.key === key ? -TABLE_SORT.direction : 1;
+      TABLE_SORT.key = key;
+      $('tblCatalog').querySelectorAll('th[data-sort-key]').forEach(th => {
+        const active = th.dataset.sortKey === key;
+        th.dataset.sortActive = String(active);
+        if (active) th.setAttribute('aria-sort', TABLE_SORT.direction > 0 ? 'ascending' : 'descending'); else th.removeAttribute('aria-sort');
+      });
+      renderCatalog_();
+    });
+    on(el.btnCatalogReset, 'click', resetCatalogFilters_);
+    on(el.ordersSearch, 'input', debounce(renderOrders_, 120));
+    on(el.leadsStatus, 'change', renderLeads_);
+    on(el.opsSummary, 'click', ev => {
+      const action = ev.target.closest('[data-store-action]')?.dataset.storeAction;
+      if (action === 'leads') { el.onlyLeadsDue.checked = true; el.leadsStatus.value = 'active'; el.qLeads.value = ''; showTab('leads'); }
+      if (action === 'orders' || action === 'payments') { el.ordersSearch.value = ''; el.ordersFilter.value = action === 'orders' ? 'pending' : 'installments'; showTab('sales'); }
+      if (action === 'low' || action === 'photos') { resetCatalogFilters_(); el.catalogAvailability.value = action === 'low' ? 'low' : 'no-photo'; showTab('catalog'); }
+      tabSection_(currentTab_())?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    on(el.catalogGrid, 'click', ev => { if (ev.target.closest('[data-store-action="reset-catalog"]')) resetCatalogFilters_(); });
+    on(el.catalogGrid, 'error', ev => {
+      if (ev.target instanceof HTMLImageElement) {
+        const host = ev.target.closest('.catalogProduct__photo');
+        if (host) host.innerHTML = '<span class="catalogProduct__placeholder"><span aria-hidden="true">♫</span>Foto no disponible</span>';
+      }
+    }, true);
     on(el.qInventory, 'input', debounce(() => renderInventory_(), 120));
     on(el.qMoves, 'input', debounce(() => { loadMoves_(el.qMoves?.value || ''); }, 240));
 
@@ -3573,7 +3861,10 @@ export function boot() {
       if (!act || !id) return;
 
       try {
-        if (act === 'follow') openFollowUpModal_(id);
+        if (act === 'product') {
+          const lead = (State.get().leads || []).find(l => String(l.id) === String(id));
+          openProductShare_(State.productsIndex().get(String(lead?.product_id)));
+        } else if (act === 'follow') openFollowUpModal_(id);
         else if (act === 'convert') await convertLeadToSale_(id);
         else if (act === 'lost') await markLeadLost_(id);
         else if (act === 'reopen') await reopenLead_(id);
@@ -3623,6 +3914,10 @@ export function boot() {
       renderPricingForm_();
     });
     on(el.s_product_query, 'input', debounce(() => syncStockProductSelection_(), 120));
+    on(el.l_product_query, 'input', () => {
+      const pid = resolveProductIdFromQuery_(el.l_product_query.value);
+      if (el.l_product_id) el.l_product_id.value = pid;
+    });
     on(el.s_mode, 'change', () => syncStockModeUI_());
 
     on(el.btnRestockOpen, 'click', () => openRestockUI_());
@@ -3652,7 +3947,7 @@ export function boot() {
       }
     });
 
-    on(el.catalogBody, 'click', async (ev) => {
+    const handleCatalogClick = async (ev) => {
       const btn = ev.target?.closest?.('button');
       if (!btn) return;
       const act = btn.dataset.act;
@@ -3663,6 +3958,8 @@ export function boot() {
         if (act === 'share') {
           await ensureProductsLoaded_().catch(() => {});
           openProductShare_(State.productsIndex().get(String(id)) || null);
+        } else if (act === 'sell') {
+          addProductToSale_(State.productsIndex().get(String(id)) || null);
         } else if (act === 'edit') {
           await ensureProductsLoaded_().catch(() => {});
           const p = State.productsIndex().get(String(id)) || null;
@@ -3677,24 +3974,45 @@ export function boot() {
       } catch (e) {
         toast(e?.message || String(e), false);
       }
-    });
+    };
+    on(el.catalogBody, 'click', handleCatalogClick);
+    on(el.catalogGrid, 'click', handleCatalogClick);
 
     on(el.p_image_file, 'change', () => {
       const file = el.p_image_file?.files?.[0];
       if (!file) { renderProductImagePreview_(el.p_image?.value || ''); return; }
-      if (!file.type.startsWith('image/')) { toast('Selecciona una imagen válida', false); el.p_image_file.value = ''; return; }
-      renderProductImagePreview_(URL.createObjectURL(file));
+      resetImagePreview_();
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+        toast('Selecciona una foto JPG, PNG o WEBP de máximo 10 MB.', false); el.p_image_file.value = ''; renderProductImagePreview_(el.p_image?.value); return;
+      }
+      imagePreviewObjectUrl_ = URL.createObjectURL(file);
+      if (el.p_image) el.p_image.value = '';
+      renderProductImagePreview_(imagePreviewObjectUrl_);
     });
     on(el.p_image, 'input', debounce(() => {
       if (!el.p_image_file?.files?.length) renderProductImagePreview_(el.p_image?.value || '');
     }, 160));
     on(el.btnProductCopy, 'click', () => copyProductShare_().catch(e => toast(e?.message || 'No pude copiar la ficha', false)));
     on(el.btnProductShare, 'click', () => shareProduct_().catch(e => toast(e?.message || 'No pude preparar el envío', false)));
+    on(el.btnProductPhoto, 'click', () => copyProductPhoto_().catch(() => toast('No pude copiar la foto. Usa Descargar foto para adjuntarla.', false)));
+    on(el.btnProductDownload, 'click', () => downloadProductPhoto_().catch(e => toast(e?.message || 'No pude descargar la foto', false)));
+    on(el.btnProductSell, 'click', () => { el.modalProductShare?.close(); addProductToSale_(sharingProduct_); });
+    on(el.btnProductEdit, 'click', () => { el.modalProductShare?.close(); openProductModal_(sharingProduct_); });
+    on(el.btnProductLead, 'click', () => {
+      const p = sharingProduct_; if (!p) return;
+      el.modalProductShare?.close(); openLeadModal_(null);
+      el.l_product_id.value = p.id; el.l_product_query.value = buildProductOptionLabel_(p);
+    });
+    on(el.btnRemoveProductImage, 'click', () => {
+      resetImagePreview_(); el.p_image.value = ''; el.p_image_file.value = ''; renderProductImagePreview_('');
+    });
+    on(el.modalProduct, 'close', resetImagePreview_);
 
     on(el.btnRefreshOrders, 'click', async () => {
       await ensureOrdersLoaded_(true).catch(() => {});
       renderOrders_();
-      toast('Pedidos actualizados ✅', true);
+      renderOperations_();
+      toast(State.get().ordersLoadError ? 'No pude actualizar las ventas compartidas. Revisa la conexión.' : 'Pedidos actualizados ✅', !State.get().ordersLoadError);
     });
 
     on(el.ordersBody, 'click', async (ev) => {
@@ -3707,12 +4025,14 @@ export function boot() {
       const delId = btn.dataset.orderDel;
       const detailId = btn.dataset.orderDetail;
       const deleteId = btn.dataset.orderDelete;
+      const cancelId = btn.dataset.orderCancel;
 
       if (openId !== undefined) { await openOrder_(openId); return; }
       if (payId !== undefined) { await markOrderPaid_(payId); return; }
       if (paymentId !== undefined) { await addInstallmentPayment_(paymentId); return; }
       if (detailId !== undefined) { await openSaleDetail_(detailId); return; }
       if (deleteId !== undefined) { await deleteSaleDetail_(deleteId); return; }
+      if (cancelId !== undefined) { await cancelOrder_(cancelId); return; }
       if (delId !== undefined) {
         removeLocalOrder_(delId);
         renderOrders_();
@@ -3866,18 +4186,18 @@ export function boot() {
 
   /* Enlace temporal interesado → venta en curso. */
   const LEAD_LINK = { leadId: '' };
+  const SALE_SOURCE = { id: '' };
 
   function todayISODate_() {
-    const d = new Date();
-    const pad = (x) => String(x).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const field = name => parts.find(part => part.type === name)?.value;
+    return `${field('year')}-${field('month')}-${field('day')}`;
   }
 
   function addDaysISODate_(days) {
-    const d = new Date();
-    d.setDate(d.getDate() + Math.max(0, toInt(days)));
-    const pad = (x) => String(x).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const d = new Date(`${todayISODate_()}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + Math.max(0, toInt(days)));
+    return d.toISOString().slice(0, 10);
   }
 
   function leadIsActive_(lead) {
@@ -3930,8 +4250,10 @@ export function boot() {
         const res = await StoreAPI.listLeads();
         State.setLeads(Array.isArray(res?.items) ? res.items : []);
         LEADS_LOAD.loadedOnce = true;
+        LEADS_LOAD.error = '';
       } catch (e) {
         console.warn('[leads]', e);
+        LEADS_LOAD.error = 'No se pudo actualizar la lista de interesados.';
       }
     })().finally(() => { LEADS_LOAD.inflight = null; });
 
@@ -3954,15 +4276,16 @@ export function boot() {
     if (!el.leadsBody) return;
 
     const st = State.get();
-    const q = String(el.qLeads?.value || '').toLowerCase().trim();
+    const q = String(el.qLeads?.value || '').trim();
     const onlyDue = !!el.onlyLeadsDue?.checked;
 
     let list = Array.isArray(st.leads) ? st.leads.slice() : [];
 
     if (q) {
-      list = list.filter(l => [l.name, l.phone, l.interest, l.product_name]
-        .map(x => String(x || '').toLowerCase()).join(' ').includes(q));
+      list = list.filter(l => matchesSearch_([l.name, l.phone, l.interest, l.product_name, l.notes, l.created_by, State.productsIndex().get(l.product_id)?.name], q));
     }
+    const statusFilter = el.leadsStatus?.value || 'active';
+    list = list.filter(l => statusFilter === 'all' || (statusFilter === 'active' ? leadIsActive_(l) : l.status === statusFilter));
     if (onlyDue) list = list.filter(l => ['overdue', 'today'].includes(leadDueState_(l)));
 
     // Primero los que tocan hoy o están atrasados; los cerrados al final.
@@ -3974,6 +4297,7 @@ export function boot() {
       return d === 'future' ? 2 : 3;
     };
     list.sort((a, b) => (rank(a) - rank(b)) || String(a.next_contact_at || '').localeCompare(String(b.next_contact_at || '')));
+    if (el.leadsMeta) el.leadsMeta.textContent = `${list.length} interesados en esta vista · ${leadsDueCount_()} por contactar hoy o atrasados`;
 
     if (!list.length) {
       el.leadsBody.innerHTML = `<tr><td colspan="6" class="muted">${
@@ -4034,7 +4358,7 @@ export function boot() {
           <td><span class="badge ${st_.cls}">${escapeHtml(st_.label)}</span></td>
           <td class="tiny">${escapeHtml(fmtDateOnly_(l.next_contact_at))}${dueBadge}</td>
           <td>${ultimo}</td>
-          <td class="num actionsCell">${acciones}</td>
+          <td class="num actionsCell">${prod ? `<button type="button" class="btn btn--tiny btn--ghost" data-lead-act="product" data-id="${id}">Ver producto</button>` : ''}${wa ? `<a class="btn btn--tiny btn--ghost" href="${escapeHtml(wa)}?text=${encodeURIComponent(`Hola ${l.name || ''}, te saludamos de Musicala Store. ¿Cómo vas con tu búsqueda de ${prod?.name || l.product_name || l.interest || 'productos'}?`)}" target="_blank" rel="noopener noreferrer">Contactar ↗</a>` : ''}${acciones}</td>
         </tr>
       `;
     }).join('');
@@ -4082,7 +4406,7 @@ export function boot() {
     // El campo de producto acepta texto libre: si no coincide con el catálogo,
     // se guarda como descripción (así se puede registrar algo que aún no existe).
     const raw = String(el.l_product_query?.value || '').trim();
-    const matched = parseProductIdFromInput_(raw) || String(el.l_product_id?.value || '').trim();
+    const matched = resolveProductIdFromQuery_(raw);
     const stillValid = matched && State.productsIndex().has(matched);
 
     return {
@@ -4214,6 +4538,7 @@ export function boot() {
     LEAD_LINK.leadId = String(lead.id);
 
     if (el.saleCustomer) el.saleCustomer.value = lead.name || '';
+    if (el.saleCustomerPhone) el.saleCustomerPhone.value = lead.phone || '';
     if (el.saleNotes) {
       const extra = [lead.phone ? `Tel: ${lead.phone}` : '', lead.interest || ''].filter(Boolean).join(' · ');
       el.saleNotes.value = extra ? `Interesado: ${extra}` : '';
@@ -4493,6 +4818,19 @@ export function boot() {
         State.setUser(user || null);
 
         if (!user) {
+          if (Roles.email()) {
+            State.resetAll();
+            COSTS.map = new Map(); COSTS.loaded = false;
+            PRICING.draft = null;
+            PROFIT.data = null; PROFIT.loaded = false;
+            LOAD.productsLoadedAt = 0; LOAD.inventoryLoadedAt = 0; LOAD.ordersLoadedAt = 0; LOAD.dashboardLoadedAt = 0;
+            LOAD.errors = {}; LEADS_LOAD.loadedOnce = false; LEADS_LOAD.error = '';
+            SALE_SOURCE.id = ''; LEAD_LINK.leadId = '';
+            writeLocalOrders_([]);
+            document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+            el.productForm?.reset();
+            sharingProduct_ = null; productPhotoFile_ = null; productPhotoPromise_ = null;
+          }
           Roles.clear();
           applyRoleUI_();
           if (el.userPill) el.userPill.hidden = true;

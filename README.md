@@ -2,11 +2,76 @@
 
 Manager interno de catálogo, inventario y ventas. Sitio estático (HTML + JS modules) sobre Firebase Auth + Firestore, publicado con GitHub Pages en https://catalinamedinaleal.github.io/store/
 
+## Trabajo diario
+
+El inicio muestra accesos a contactos para hoy o atrasados, pedidos pendientes,
+ventas a cuotas, stock bajo y productos sin foto. Cada acceso abre la sección
+con su filtro aplicado. Si una lectura falla, se advierte que los datos pueden
+estar desactualizados; la hora de actualización corresponde a la última carga completa.
+
+El catálogo abre en tarjetas con foto y también ofrece una tabla de gestión.
+Se puede buscar por varias palabras, con o sin tildes, incluyendo descripción,
+marca, categoría y SKU; los filtros combinan categoría, existencias, estado y
+orden por nombre, precio o actualización. El stock se lee de `inventory`, no del
+documento del producto. Un registro sin inventario aparece como stock por confirmar.
+
+Desde **Ver ficha** se puede agregar a la venta actual, registrar a un interesado,
+editar el producto o preparar información para el cliente. La ficha comercial
+copia nombre, marca, categoría, precio y descripción, con un enlace de foto;
+nunca incluye costo, margen ni ubicación interna. **Copiar foto** prepara una
+imagen PNG para pegar; **Descargar foto** permite adjuntarla. Compartir con archivo
+depende del soporte del navegador y del destino elegido; la ficha de texto y la
+descarga quedan disponibles cuando ese soporte no existe.
+
+Las fotos JPG, PNG y WEBP (máximo 10 MB) se cargan a Firebase Storage al guardar
+el producto. La vista previa funciona con archivos locales; quitar la foto
+elimina la referencia del producto, conservando el archivo anterior en Storage.
+
+Ventas incluye búsqueda por cliente, WhatsApp, producto, asesor, notas e ID;
+filtros de pendientes, cuotas, pagadas y canceladas, y el saldo de cuotas visible.
+El teléfono del cliente se puede guardar y editar. Interesados permite filtrar
+por estado, abrir el producto relacionado, preparar contacto por WhatsApp y
+registrar seguimientos. Los enlaces de WhatsApp abren la conversación; el equipo
+decide cuándo enviar el mensaje.
+
+## Inventario y pagos
+
+- Un pedido **pendiente** no descuenta ni reserva stock. Al reabrirlo y guardarlo
+  se actualiza el mismo ID, en lugar de crear otra venta.
+- **Pagada** o **a cuotas** descuenta stock una sola vez. El primer abono de un
+  pedido pendiente confirma la venta y comprueba las existencias en la misma transacción.
+- Editar o quitar un abono ajusta el saldo sin devolver productos. Cancelar una
+  venta o eliminar una venta confirmada devuelve las unidades una sola vez.
+- Los productos repetidos en varias líneas suman sus cantidades para el stock,
+  conservando los precios y líneas comerciales originales.
+- Un interesado se marca como **compró** al confirmar la venta, no al guardar
+  una propuesta pendiente. La venta conserva `lead_id` para completar el seguimiento.
+
+Los indicadores “ventas pagadas hoy” y “utilidad hoy” corresponden a ventas completamente
+pagadas, según `paid_at` (o `created_at` para registros históricos), en hora de
+Bogotá. No representan el recaudo diario de todos los abonos. Los costos privados
+se mantienen fuera del caché local, incluso al restaurar cachés antiguos.
+
+## Validación local
+
+```bash
+node tests/firebase-store-transactions.test.mjs
+node tests/state-cache.test.mjs
+node tests/store-ui.smoke.cjs
+```
+
+Las pruebas de transacciones usan el acceso a datos real con un SDK simulado.
+La prueba de interfaz usa Playwright con autenticación y datos locales de ejemplo,
+en escritorio y móvil; bloquea peticiones externas y no escribe en producción.
+Playwright y Chromium deben estar instalados; se pueden indicar sus rutas con
+`STORE_TEST_NODE_MODULES` y `STORE_TEST_BROWSER`. Las capturas se guardan fuera del
+repositorio, en una carpeta temporal (o `STORE_TEST_OUTPUT`).
+
 ## Roles
 
 | | Admin | Asesora |
 |---|---|---|
-| Catálogo, inventario, ventas, restock | ✅ | ✅ |
+| Catálogo, fotos, fichas de cliente, inventario, ventas, reposición | ✅ | ✅ |
 | Registrar el costo que cobra el proveedor | ✅ | ✅ |
 | **Ver** costos ya guardados | ✅ | ❌ |
 | % de ganancia y utilidad por producto | ✅ | ❌ |
@@ -39,7 +104,8 @@ próximo contacto. La pestaña muestra un contador con cuántos toca contactar h
 están atrasados, y ordena la lista poniendo primero lo vencido.
 
 *Convertir en venta* abre el carrito con la persona y el producto ya cargados;
-al guardar la venta, el interesado queda marcado como "compró" y enlazado a ella.
+al confirmar una venta pagada o a cuotas, el interesado queda marcado como
+"compró" y enlazado a ella. Una propuesta pendiente mantiene el seguimiento activo.
 
 ## Cotizador admin
 
@@ -80,6 +146,8 @@ El orden importa:
    ```bash
    firebase deploy --only firestore:rules
    ```
+   Las reglas de fotos se publican con `firebase deploy --only storage --project store2026-77c54`.
+   Para un cambio de interfaz sin cambios de permisos solo se publica el sitio.
 3. **Migración de costos** (una sola vez) — entrar como admin → ⚙️ Precios → *Migrar costos antiguos*.
    Mueve los costos que estaban dentro de cada producto a `productCosts` y los borra de `products`.
    Hasta correrla, los costos viejos siguen siendo legibles para todo el equipo.

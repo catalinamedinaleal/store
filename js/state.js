@@ -30,6 +30,27 @@ const CACHE_KEYS = Object.freeze([
   'restock',
 ]);
 
+// El caché se comparte entre sesiones del navegador. Se quitan también los
+// aliases del modelo anterior y los costos anidados en líneas de venta/pedido.
+// Los objetos del estado en RAM no se modifican: admin conserva su borrador.
+const CACHE_PRIVATE_FIELDS = new Set([
+  'cost_cop', 'cost', 'costo_cop', 'costo', 'unit_cost', 'unit_cost_cop',
+  'margin_pct', 'margin', 'margen', 'margen_pct',
+  'competitor_price_cop', 'competitor_price',
+  'precio_competencia', 'precio_competencia_cop',
+  'precioCompetencia', 'precioCompetenciaCOP',
+]);
+
+function safeCacheData_(value) {
+  if (Array.isArray(value)) return value.map(safeCacheData_);
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  const safe = {};
+  for (const [key, data] of Object.entries(value)) {
+    if (!CACHE_PRIVATE_FIELDS.has(key)) safe[key] = safeCacheData_(data);
+  }
+  return safe;
+}
+
 /* =========================
    Helpers
 ========================= */
@@ -236,7 +257,7 @@ function normalizeSaleItems_(items) {
 ========================= */
 function _makeCachePayload() {
   const safe = {};
-  for (const k of CACHE_KEYS) safe[k] = _state[k];
+  for (const k of CACHE_KEYS) safe[k] = safeCacheData_(_state[k]);
 
   return {
     v: CACHE_VERSION,
@@ -308,7 +329,9 @@ function loadCache_() {
   const expired = savedAt > 0 && ttlMs > 0 && (Date.now() - savedAt) > ttlMs;
   if (expired) return null;
 
-  const data = cached.data;
+  // Un caché ya existente puede haber sido guardado por versiones anteriores.
+  // Filtrarlo al leer evita que reintroduzca costos al cambiar de cuenta.
+  const data = safeCacheData_(cached.data);
   if (!isObj(data)) return null;
 
   return {

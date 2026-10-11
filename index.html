@@ -36,7 +36,7 @@
 
     style-src 'self' 'unsafe-inline';
 
-    img-src 'self' data: https:;
+    img-src 'self' data: blob: https:;
 
     connect-src
       'self'
@@ -44,6 +44,8 @@
       https://www.googleapis.com
       https://identitytoolkit.googleapis.com
       https://securetoken.googleapis.com
+      https://firebasestorage.googleapis.com
+      https://storage.googleapis.com
       https://firestore.googleapis.com
       https://firestore.googleapis.com/google.firestore.v1.Firestore
       https://cdn.jsdelivr.net;
@@ -57,7 +59,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-08-21.1";
+    window.__BUILD__ = "2026-10-11.1";
   </script>
 
   <!--
@@ -213,7 +215,7 @@
     <div style="padding:16px;max-width:900px;margin:16px auto;border:1px solid rgba(11,16,32,.12);border-radius:14px;background:#fff;">
       <strong>JavaScript está desactivado.</strong>
       <div style="margin-top:6px;color:rgba(11,16,32,.75);">
-        Este panel necesita JavaScript para autenticación y conexión con Sheets/Apps Script.
+        Este panel necesita JavaScript para autenticación y conexión con Firebase.
       </div>
     </div>
   </noscript>
@@ -228,7 +230,7 @@
         <div class="brand__dot" aria-hidden="true"></div>
         <div class="brand__text">
           <div class="brand__title">Musicala Store</div>
-          <div class="brand__sub">Manager interno</div>
+          <div class="brand__sub">Instrumentos · accesorios · arte</div>
         </div>
       </div>
     </div>
@@ -245,7 +247,7 @@
         aria-label="Abrir pedido a proveedor"
         hidden>
         <span aria-hidden="true">🧺</span>
-        <span class="tiny" style="font-weight:700;">Restock</span>
+        <span class="tiny" style="font-weight:700;">Reposición</span>
         <span class="restockBadge" id="restockCount" hidden>0</span>
       </button>
 
@@ -319,14 +321,16 @@
       <!-- Hero / KPIs -->
       <section class="hero" aria-label="Resumen">
         <div class="hero__left">
-          <h1 class="h1">Panel Store</h1>
-          <p class="muted">Catálogo, inventario y ventas. En COP sin decimales.</p>
+          <div class="eyebrow">TU ESPACIO DE VENTA</div>
+          <h1 class="h1">Cada producto, una nueva posibilidad.</h1>
+          <p class="muted">Encuentra lo que buscan, comparte una ficha y acompaña cada venta.</p>
+          <p class="tiny muted" id="storeSyncStatus" role="status"></p>
         </div>
 
         <div class="hero__right kpis" aria-label="Indicadores">
           <!-- ✅ Solo admin: cifras de venta -->
           <div class="kpi" data-role="admin" hidden>
-            <div class="kpi__label">Ventas hoy</div>
+            <div class="kpi__label">Ventas pagadas hoy</div>
             <div class="kpi__value mono" id="kpiToday">—</div>
           </div>
           <div class="kpi">
@@ -339,6 +343,9 @@
           </div>
         </div>
       </section>
+
+      <div class="opsSummary" id="opsSummary" aria-label="Prioridades de la tienda"></div>
+      <div class="syncNotice" id="storeDataNotice" role="status" hidden></div>
 
       <!-- Tabs -->
       <nav class="tabs" aria-label="Secciones">
@@ -359,13 +366,13 @@
         <div class="card__head">
           <div>
             <h2 class="h2">Catálogo</h2>
-            <p class="muted tiny">Buscar, ordenar, editar y activar/desactivar productos.</p>
+            <p class="muted tiny">Fotos, disponibilidad y fichas listas para tus clientes.</p>
           </div>
 
           <div class="card__actions" aria-label="Acciones de catálogo" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
             <label class="sr-only" for="qCatalog">Buscar en catálogo</label>
             <input class="input input--sm" id="qCatalog" type="search" autocomplete="off"
-              placeholder="Buscar (nombre, marca, categoría, sku, stock)…" />
+              placeholder="¿Qué busca el cliente? Piano, acuarela, marca, SKU…" />
             <label class="tiny muted" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
               <input type="checkbox" id="onlyMissingPrice" />
               Solo pendientes (sin precio o sin costo)
@@ -373,8 +380,17 @@
             <button class="btn btn--primary" id="btnNewProduct" type="button">Nuevo producto</button>
           </div>
         </div>
-
-        <div class="tablewrap">
+        <div class="filterBar" aria-label="Filtros del catálogo">
+          <label class="filterField"><span>Categoría</span><select class="input" id="catalogCategory"><option value="">Todas las categorías</option></select></label>
+          <label class="filterField"><span>Disponibilidad</span><select class="input" id="catalogAvailability"><option value="all">Cualquier stock</option><option value="available">Con existencias</option><option value="out">Sin existencias</option><option value="low">Stock bajo</option><option value="no-photo">Sin foto</option></select></label>
+          <label class="filterField"><span>Estado</span><select class="input" id="catalogStatus"><option value="active">Activos</option><option value="all">Todos</option><option value="hidden">Ocultos</option></select></label>
+          <label class="filterField"><span>Ordenar</span><select class="input" id="catalogSort"><option value="name">Nombre A–Z</option><option value="recent">Más recientes</option><option value="price-asc">Menor precio</option><option value="price-desc">Mayor precio</option></select></label>
+          <label class="filterField"><span>Vista</span><select class="input" id="catalogLayout"><option value="cards">Tarjetas con foto</option><option value="table">Tabla de gestión</option></select></label>
+          <button class="btn btn--ghost" id="btnCatalogReset" type="button">Limpiar filtros</button>
+        </div>
+        <p class="resultsMeta tiny muted" id="catalogMeta" role="status" aria-live="polite"></p>
+        <div class="catalogGrid" id="catalogGrid"></div>
+        <div class="tablewrap" id="catalogTableWrap" hidden>
           <table class="table" id="tblCatalog" aria-label="Tabla de productos">
             <thead>
               <tr>
@@ -491,18 +507,24 @@
         <div class="card subcard" id="ordersPane" style="margin-top:14px;">
           <div class="card__head">
             <div>
-              <h3 class="h3">Pendientes y cuotas</h3>
+              <h3 class="h3">Pedidos y ventas</h3>
               <p class="muted tiny">Revisa pedidos abiertos, saldos y registra nuevos abonos.</p>
             </div>
             <div class="card__actions">
+              <input class="input" id="ordersSearch" type="search" aria-label="Buscar ventas" placeholder="Cliente, producto, asesor o pedido…" />
               <select class="input" id="ordersFilter" aria-label="Filtrar ventas" style="width:auto;">
                 <option value="open">Pendientes y cuotas</option>
+                <option value="pending">Solo pedidos pendientes</option>
+                <option value="installments">Solo cuotas</option>
                 <option value="paid">Pagadas</option>
+                <option value="cancelled">Canceladas</option>
                 <option value="all">Todas</option>
               </select>
               <button class="btn btn--ghost" id="btnRefreshOrders" type="button">Actualizar</button>
             </div>
           </div>
+
+          <div class="salesSummary" id="salesSummary" aria-label="Resumen de ventas visibles"></div>
 
           <div class="tablewrap">
             <table class="table table--compact" aria-label="Tabla de pedidos pendientes">
@@ -569,7 +591,11 @@
 
               <label class="field">
                 <span class="label">Cliente <span class="muted tiny">(opcional)</span></span>
-                <input class="input" id="saleCustomer" type="text" placeholder="ID o nombre corto" />
+                <input class="input" id="saleCustomer" type="text" placeholder="Nombre del cliente" />
+              </label>
+              <label class="field">
+                <span class="label">WhatsApp del cliente <span class="muted tiny">(opcional)</span></span>
+                <input class="input" id="saleCustomerPhone" type="tel" inputmode="tel" placeholder="Ej. 300 123 4567" />
               </label>
 
               <label class="field">
@@ -608,7 +634,7 @@
                 <button class="btn btn--ghost" id="btnCancelSale" type="button">Cerrar</button>
               </div>
 
-              <p class="tiny muted">Guardar descuenta inventario (si no está cancelada) y deja movimiento registrado.</p>
+              <p class="tiny muted" id="saleStockHelp">Una venta pagada o a cuotas descuenta inventario. Un pedido pendiente conserva el stock hasta su confirmación.</p>
             </div>
           </div>
         </div>
@@ -626,6 +652,7 @@
             <label class="sr-only" for="qLeads">Buscar interesados</label>
             <input class="input input--sm" id="qLeads" type="search" autocomplete="off"
               placeholder="Buscar por nombre, teléfono o interés…" />
+            <select class="input" id="leadsStatus" aria-label="Estado de interesados"><option value="active">En proceso</option><option value="all">Todos</option><option value="nuevo">Nuevos</option><option value="seguimiento">En seguimiento</option><option value="ganado">Compraron</option><option value="perdido">No compraron</option></select>
             <label class="tiny muted" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
               <input type="checkbox" id="onlyLeadsDue" />
               Solo por contactar
@@ -633,6 +660,8 @@
             <button class="btn btn--primary" id="btnNewLead" type="button">Nuevo interesado</button>
           </div>
         </div>
+
+        <p class="resultsMeta tiny muted" id="leadsMeta" role="status" aria-live="polite"></p>
 
         <div class="tablewrap">
           <table class="table" id="tblLeads" aria-label="Tabla de interesados">
@@ -730,7 +759,7 @@
         <div class="dash">
           <div class="card subcard">
             <div class="kpi kpi--big">
-              <div class="kpi__label">Ventas hoy</div>
+              <div class="kpi__label">Ventas pagadas hoy</div>
               <div class="kpi__value mono" id="dashToday">—</div>
             </div>
             <div class="muted tiny">Basado en ventas con status pagado.</div>
@@ -895,7 +924,8 @@
 
         <label class="field">
           <span class="label">Categoría</span>
-          <input class="input" id="p_category" type="text" placeholder="instrumento / accesorio / arte…" />
+          <input class="input" id="p_category" type="text" list="productCategories" placeholder="Instrumentos / Accesorios / Arte…" />
+          <datalist id="productCategories"></datalist>
         </label>
 
         <label class="field">
@@ -948,6 +978,7 @@
           <span class="muted tiny">JPG, PNG o WEBP · máximo 10 MB. También puedes pegar una URL si ya la tienes.</span>
           <input class="input" id="p_image" type="url" placeholder="https://..." style="margin-top:6px;" />
           <div class="productImagePreview" id="p_image_preview" hidden></div>
+          <button class="btn btn--tiny btn--ghost" id="btnRemoveProductImage" type="button">Quitar foto</button>
         </label>
       </div>
 
@@ -963,14 +994,22 @@
   <dialog class="modal" id="modalProductShare" aria-label="Ficha para cliente">
     <div class="modal__card productShareCard">
       <div class="modal__head">
-        <div><h3 class="h3">Ficha para cliente</h3><p class="muted tiny">Lista para copiar o enviar con su foto.</p></div>
+        <div><div class="eyebrow">MUSICALA STORE</div><h3 class="h3">Ficha del producto</h3><p class="muted tiny">Comparte los datos o continúa con la venta.</p></div>
         <button class="btn btn--ghost" type="button" data-close-dialog="modalProductShare">Cerrar</button>
       </div>
       <div id="productShareContent"></div>
+      <div class="productNextActions">
+        <button class="btn btn--primary" id="btnProductSell" type="button">Agregar a venta</button>
+        <button class="btn btn--ghost" id="btnProductLead" type="button">Registrar interesado</button>
+        <button class="btn btn--ghost" id="btnProductEdit" type="button">Editar producto</button>
+      </div>
       <div class="modal__foot">
         <button class="btn btn--ghost" id="btnProductCopy" type="button">Copiar ficha</button>
+        <button class="btn btn--ghost" id="btnProductPhoto" type="button">Copiar foto</button>
+        <button class="btn btn--ghost" id="btnProductDownload" type="button">Descargar foto</button>
         <button class="btn btn--primary" id="btnProductShare" type="button">Enviar ficha y foto</button>
       </div>
+      <p class="tiny muted" id="productShareHelp">Copiar ficha incluye el enlace de la foto. También puedes copiar o descargar la imagen para adjuntarla en WhatsApp.</p>
     </div>
   </dialog>
 
@@ -1381,6 +1420,10 @@
           <input class="input" id="sd_customer" type="text" placeholder="Nombre del cliente" />
         </label>
         <label class="field">
+          <span class="label">WhatsApp del cliente</span>
+          <input class="input" id="sd_phone" type="tel" inputmode="tel" placeholder="Ej. 300 123 4567" />
+        </label>
+        <label class="field">
           <span class="label">Método de pago</span>
           <select class="input" id="sd_pay">
             <option value="cash">Efectivo</option>
@@ -1427,7 +1470,7 @@
 
       <div class="modal__foot">
         <button class="btn btn--primary" id="btnSaveSaleDetail" type="button">Guardar cambios</button>
-        <button class="btn btn--ghost" id="btnDeleteSale" type="button" style="color:#b42318;">Eliminar venta</button>
+        <button class="btn btn--ghost" id="btnDeleteSale" type="button" style="color:#b42318;" data-role="admin" hidden>Eliminar venta</button>
         <button class="btn btn--ghost" type="button" data-close-dialog="modalSaleDetail">Cancelar</button>
       </div>
     </form>
