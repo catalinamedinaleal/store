@@ -545,6 +545,26 @@ export function boot() {
     } catch { return ''; }
   }
 
+  /* Color por categoría para las fichas del catálogo.
+     Las categorías las escribe el equipo (no hay lista fija), así que las
+     conocidas tienen color propio y cualquier otra recibe uno estable de la
+     paleta según su nombre: siempre el mismo, siempre dentro de la marca. */
+  const CATEGORY_PALETTE = Object.freeze(['#2f6d52', '#8a6a3f', '#a35a46', '#5b6b8a', '#7a5c86', '#4f7a6a']);
+  const CATEGORY_FIXED = Object.freeze({
+    instrumento: '#2f6d52', instrumentos: '#2f6d52',
+    accesorio: '#8a6a3f', accesorios: '#8a6a3f',
+    arte: '#a35a46',
+  });
+
+  function categoryColor_(category) {
+    const key = slug_(String(category || ''));
+    if (!key) return '#b08a54';
+    if (CATEGORY_FIXED[key]) return CATEGORY_FIXED[key];
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    return CATEGORY_PALETTE[h % CATEGORY_PALETTE.length];
+  }
+
   function pickPriceCOP_(p) { return toInt(p?.price_cop ?? p?.price ?? p?.precio_cop ?? p?.precio); }
   function pickCostCOP_(p) { return toInt(p?.cost_cop ?? p?.cost ?? p?.costo_cop ?? p?.costo); }
   function pickCompetitorCOP_(p) {
@@ -1630,9 +1650,10 @@ export function boot() {
         const photo = imageUrl_(p.image_url);
         const price = pickPriceCOP_(p);
         const productId = escapeHtml(p.id);
-        return `<article class="catalogProduct">
-          <button type="button" class="catalogProduct__photo" data-act="share" data-id="${productId}" aria-label="Ver ficha de ${escapeHtml(p.name)}">
-            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(p.name)}" loading="lazy" />` : '<span class="catalogProduct__placeholder"><span aria-hidden="true">♫</span>Sin foto</span>'}
+        const catColor = categoryColor_(p.category);
+        return `<article class="catalogProduct" style="--cat:${catColor}">
+          <button type="button" class="catalogProduct__photo${photo ? '' : ' catalogProduct__photo--empty'}" data-act="share" data-id="${productId}" aria-label="Ver ficha de ${escapeHtml(p.name)}">
+            ${photo ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" />` : '<span class="catalogProduct__placeholder"><span aria-hidden="true">♫</span>Sin foto</span>'}
           </button>
           <div class="catalogProduct__body"><div class="eyebrow">${escapeHtml(p.category || 'PRODUCTO')}</div>
             <h3><button type="button" class="textButton" data-act="share" data-id="${productId}">${escapeHtml(p.name || p.id)}</button></h3>
@@ -3098,16 +3119,82 @@ export function boot() {
     return 'jpg';
   }
 
+  /* =========================
+     Optimización de fotos
+     -------------------------
+     Antes se subía el archivo tal cual (hasta 10 MB). Una foto de celular pesa
+     4-6 MB, así que subirla era lento y, peor, CADA ficha del catálogo se la
+     descargaba completa. Aquí se reduce en el navegador antes de subir: una foto
+     de 4000x3000 queda en 1400px y ~200 KB, con la misma pinta en pantalla.
+  ========================= */
+  const PHOTO_MAX_SIDE = 1400;   // suficiente para la ficha y para compartir
+  const PHOTO_QUALITY = 0.82;
+  const PHOTO_SKIP_BYTES = 400 * 1024; // ya liviana: no vale la pena recomprimir
+
+  function fmtBytes_(n) {
+    const b = Math.max(0, toInt(n));
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function downscaleImage_(file) {
+    try {
+      if (!file || !String(file.type || '').startsWith('image/')) return file;
+
+      // imageOrientation respeta el EXIF: si no, las fotos del celular salen giradas.
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+
+      if (scale === 1 && file.size <= PHOTO_SKIP_BYTES) { bitmap.close?.(); return file; }
+
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { bitmap.close?.(); return file; }
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      bitmap.close?.();
+
+      // Un PNG puede traer transparencia; WEBP la conserva y pesa poco.
+      const type = file.type === 'image/png' ? 'image/webp' : 'image/jpeg';
+      const blob = await new Promise(res => canvas.toBlob(res, type, PHOTO_QUALITY));
+
+      // Si no mejoró, nos quedamos con el original: nunca empeoramos la foto.
+      if (!blob || blob.size >= file.size) return file;
+
+      const ext = type === 'image/webp' ? 'webp' : 'jpg';
+      const base = String(file.name || 'foto').replace(/\.[^.]+$/, '');
+      return new File([blob], `${base}.${ext}`, { type });
+    } catch {
+      // Navegador raro o imagen que no se puede decodificar: sube el original.
+      return file;
+    }
+  }
+
+  let lastPhotoSavings_ = '';
+
   async function uploadProductImage_(file, productId) {
     if (!file) return safeStr_(el.p_image?.value, 1200);
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('La foto debe ser JPG, PNG o WEBP.');
     if (file.size > 10 * 1024 * 1024) throw new Error('La foto supera el máximo de 10 MB.');
     const storage = getFirebaseStorage();
     if (!storage) throw new Error('Firebase Storage no está inicializado.');
+
+    setBusy_(true, 'Optimizando foto…');
+    const optimized = await downscaleImage_(file);
+    lastPhotoSavings_ = optimized !== file
+      ? `Foto optimizada: ${fmtBytes_(file.size)} → ${fmtBytes_(optimized.size)}`
+      : '';
+    if (lastPhotoSavings_) console.info('[foto]', lastPhotoSavings_);
+
+    setBusy_(true, 'Subiendo foto…');
     const mod = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js');
-    const path = `products/${encodeURIComponent(productId)}/${Date.now()}.${extensionForImage_(file)}`;
+    const path = `products/${encodeURIComponent(productId)}/${Date.now()}.${extensionForImage_(optimized)}`;
     const task = mod.ref(storage, path);
-    await mod.uploadBytes(task, file, { contentType: file.type, cacheControl: 'public,max-age=31536000,immutable' });
+    await mod.uploadBytes(task, optimized, { contentType: optimized.type, cacheControl: 'public,max-age=31536000,immutable' });
     return mod.getDownloadURL(task);
   }
 
@@ -3259,6 +3346,7 @@ export function boot() {
     delete prod._costTouched;
 
     setBusy_(true, imageFile ? 'Subiendo foto y guardando producto…' : 'Guardando producto…');
+    lastPhotoSavings_ = '';
     try {
       if (imageFile) prod.image_url = await uploadProductImage_(imageFile, prod.id);
       if (imageFile && el.p_image) { el.p_image.value = prod.image_url; el.p_image_file.value = ''; renderProductImagePreview_(prod.image_url); }
@@ -3267,7 +3355,8 @@ export function boot() {
         includeCompetitor: Roles.can('see_competitor'),
         updatedBy: Roles.email(),
       });
-      toast(res?.mode === 'created' ? 'Producto creado ✅' : 'Producto actualizado ✅', true);
+      const base = res?.mode === 'created' ? 'Producto creado ✅' : 'Producto actualizado ✅';
+      toast(lastPhotoSavings_ ? `${base} · ${lastPhotoSavings_}` : base, true);
       el.modalProduct?.close?.();
       if (writeCost) COSTS.loaded = false; // el costo cambió: recargar para admin
       await refreshAfterProductChange_();
