@@ -1334,6 +1334,25 @@ body{
 }
 
 
+/* Comprobantes comerciales */
+.receiptsIntro{ padding:0 22px 18px; }
+.receiptsIntro details{ border:1px solid #ded8cc; border-radius:12px; padding:12px; margin-block:14px; }
+.receiptsIntro summary{ cursor:pointer; font-weight:650; }
+#receiptsSearch{ flex:1; min-width:180px; }
+#receiptsFilter{ width:auto; }
+.receiptError{ color:#a32925 !important; }
+.receiptPaper{ margin-top:20px; padding:22px; background:#fff; border:1px solid #ded8cc; border-radius:12px; overflow-wrap:anywhere; }
+.receiptPaper__head{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; border-bottom:2px solid #294641; padding-bottom:14px; }
+.receiptPaper h3{ margin:0 0 8px; }
+.receiptPaper .table{ min-width:0; width:100%; table-layout:fixed; }
+.receiptPaper .table th, .receiptPaper .table td{ padding:8px 5px; font-size:11px; overflow-wrap:anywhere; }
+.receiptPaper .table th:first-child{ width:40%; }
+.receiptPaper .table th:not(:first-child){ width:20%; }
+.receiptTotals{ border-top:1px solid #ded8cc; margin-top:18px; padding-top:10px; }
+.receiptTotals p{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; }
+#modalReceipt .modal__foot{ position:sticky; bottom:0; padding-bottom:8px; }
+@media(max-width:720px){ .receiptsIntro{ padding:0 14px 16px; } .receiptPaper{ padding:14px; } #modalReceipt .modal__foot .btn{ flex:1 1 calc(50% - 8px); } }
+
 /* Store: explorar, atender y vender. */
 :root{ --a1:#294641; --a2:#1d3531; --focus:rgba(41,70,65,.18); --row-hover:rgba(41,70,65,.04); }
 body{ background:#f5f1ea; line-height:1.45; }

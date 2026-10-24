@@ -1,6 +1,7 @@
 'use strict';
 
 import { getFirestoreDb } from './firebase.js';
+import { buildReceiptSnapshot, normalizeReceiptIssuer, receiptSaleSignature } from './receipts.js';
 
 let fs = null;
 async function sdk_() {
@@ -141,6 +142,58 @@ const COST_FIELDS_LEGACY = [
 ];
 
 export const StoreAPI = {
+  async getReceiptSettings() {
+    const f = await sdk_();
+    const snapshot = await f.getDoc(f.doc(getFirestoreDb(), 'settings', 'receipts'));
+    return { ok: true, issuer: snapshot.data()?.issuer || null };
+  },
+  async saveReceiptIssuer(value, by = '') {
+    const issuer = normalizeReceiptIssuer(value), f = await sdk_(), db = getFirestoreDb();
+    const ref = f.doc(db, 'settings', 'receipts');
+    await f.setDoc(ref, { issuer, updated_at: f.serverTimestamp(), updated_by: s(by) }, { merge: true });
+    const result = await f.getDoc(ref);
+    if (Object.entries(issuer).some(([key, value]) => result.data()?.issuer?.[key] !== value)) throw new Error('No pude verificar la configuración guardada. Actualiza antes de emitir.');
+    return { ok: true, issuer };
+  },
+  async issueReceipt(saleId, { buyer, note, expectedSignature, by = '' } = {}) {
+    const f = await sdk_(), db = getFirestoreDb();
+    const saleRef = f.doc(db, 'sales', s(saleId)), settingsRef = f.doc(db, 'settings', 'receipts');
+    let receipt;
+    await f.runTransaction(db, async tx => {
+      const sale = (await tx.get(saleRef)).data();
+      if (!sale) throw new Error('Venta no encontrada.');
+      if (sale.receipt) { receipt = sale.receipt; return; } // Reintentos: mismo número, nunca duplicar.
+      if (!expectedSignature || receiptSaleSignature(sale) !== expectedSignature) throw new Error('La venta cambió. Actualiza y revisa los valores antes de emitir.');
+      const settings = (await tx.get(settingsRef)).data() || {};
+      if (!settings.issuer) throw new Error('Un administrador debe configurar primero a la vendedora.');
+      const previousNumber = Number(settings.last_number || 0);
+      if (!Number.isSafeInteger(previousNumber) || previousNumber < 0 || previousNumber >= 999999999) throw new Error('Revisa el consecutivo de comprobantes.');
+      const productIds = [...new Set((sale.items || []).map(row => s(row.product_id)))];
+      const products = [];
+      for (const productId of productIds) {
+        if (!productId) throw new Error('Producto sin identificar.');
+        const product = await tx.get(f.doc(db, 'products', productId));
+        products.push({ id: productId, name: product.data()?.name || productId });
+      }
+      receipt = buildReceiptSnapshot({ sale, saleId, issuer: settings.issuer, buyer, note, products, number: 'CV-' + String(previousNumber + 1).padStart(6, '0'), by });
+      tx.set(settingsRef, { last_number: previousNumber + 1 }, { merge: true });
+      tx.update(saleRef, { receipt, receipt_issued_at: f.serverTimestamp(), updated_at: f.serverTimestamp(), updated_by: s(by) });
+    });
+    return { ok: true, receipt };
+  },
+  async voidReceipt(saleId, reason, by = '') {
+    if (!s(reason)) throw new Error('Indica el motivo de anulación.');
+    const f = await sdk_(), ref = f.doc(getFirestoreDb(), 'sales', s(saleId));
+    await f.runTransaction(getFirestoreDb(), async tx => {
+      const sale = (await tx.get(ref)).data();
+      if (!sale?.receipt) throw new Error('No hay comprobante para anular.');
+      if (sale.receipt_void) return;
+      // settings solo admite escritura de admin con las reglas actuales.
+      tx.set(f.doc(getFirestoreDb(), 'settings', 'receipts'), { last_void_at: f.serverTimestamp(), last_void_by: s(by) }, { merge: true });
+      tx.update(ref, { receipt_void: { reason: s(reason).slice(0, 600), at: new Date().toISOString(), by: s(by) } });
+    });
+    return { ok: true };
+  },
   async ping() { return { ok: true }; },
   async listProducts() { return { ok: true, items: await all_('products') }; },
   async listInventory() { return { ok: true, items: await all_('inventory') }; },
@@ -371,7 +424,7 @@ export const StoreAPI = {
     const now = await f.getDoc(invRef); return { ok:true, move_id:moveId, stock:n(now.data()?.stock) };
   },
   async listSales(status = 'pending', includeItems = false, limit = 200) { let sales = await allIncludingMissing_('sales','created_at'); if (status && status !== 'all') sales = sales.filter(x => x.status === status); return { ok:true, items:sales.slice(0,limit).map(x => ({...x,created_at:iso(x.created_at),paid_at:iso(x.paid_at),items:includeItems ? (x.items||[]) : undefined})) }; },
-  async getSale(saleId) { const f=await sdk_(); const snap=await f.getDoc(f.doc(getFirestoreDb(),'sales',s(saleId))); if(!snap.exists()) throw new Error('Venta no encontrada'); const x=item(snap); return {ok:true,sale:{...x,created_at:iso(x.created_at),paid_at:iso(x.paid_at)},items:x.items||[]}; },
+  async getSale(saleId, serverOnly = false) { const f=await sdk_(); const read = serverOnly ? f.getDocFromServer : f.getDoc; const snap=await read(f.doc(getFirestoreDb(),'sales',s(saleId))); if(!snap.exists()) throw new Error('Venta no encontrada'); const x=item(snap); return {ok:true,sale:{...x,created_at:iso(x.created_at),paid_at:iso(x.paid_at)},items:x.items||[]}; },
   async createSale({ sale = {}, items = [], pendingId = '' } = {}) {
     const f = await sdk_();
     const db = getFirestoreDb();
@@ -503,6 +556,10 @@ export const StoreAPI = {
         updated_by: s(updatedBy),
       };
 
+      if (actualNext === 'cancelled' && sale.receipt && !sale.receipt_void) {
+        patch.receipt_void = { reason: 'Venta cancelada', at: new Date().toISOString(), by: s(updatedBy) };
+      }
+
       if (actualNext === 'paid') {
         patch.paid_cop = total;
         patch.balance_cop = 0;
@@ -540,6 +597,7 @@ export const StoreAPI = {
     await f.runTransaction(db, async tx => {
       const sale = (await tx.get(ref)).data();
       if (!sale) throw new Error('Venta no encontrada');
+      if (sale.receipt) throw new Error('Esta venta tiene un comprobante. Cancela la venta para conservar el soporte y su historial.');
       const discounted = stockPosted_(sale);
       if (discounted) {
         const rows = await readSaleStock_(f, db, tx, sale.items, 1);

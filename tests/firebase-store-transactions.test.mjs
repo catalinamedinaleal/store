@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import { receiptSaleSignature, buildReceiptSnapshot, receiptText } from '../js/receipts.js';
 
 // Ejecuta el StoreAPI real, sustituyendo únicamente sus dos entradas Firebase.
 // El mock rechaza lecturas posteriores a escrituras igual que Firestore, y
 // aplica cambios solo al terminar la transacción para comprobar atomicidad.
 const source = fs.readFileSync(new URL('../js/firebase-store.js', import.meta.url), 'utf8')
   .replace("import { getFirestoreDb } from './firebase.js';", 'const getFirestoreDb = () => ({});')
+  .replace("import { buildReceiptSnapshot, normalizeReceiptIssuer, receiptSaleSignature } from './receipts.js';", '')
   .replace('let fs = null;', 'let fs = globalThis.mockSdk;')
   .replace('export const StoreAPI =', 'globalThis.StoreAPI =');
 
@@ -43,6 +45,7 @@ function store(seed = {}) {
     },
   };
   const context = vm.createContext({ mockSdk: sdk, console });
+  vm.runInContext(fs.readFileSync(new URL('../js/receipts.js', import.meta.url), 'utf8').replaceAll('export ', ''), context);
   vm.runInContext(source, context, { filename: 'firebase-store.js' });
   return {
     api: context.StoreAPI,
@@ -263,4 +266,83 @@ test('conteo físico usa existencias actuales y registra la diferencia real', as
   assert.equal(st.moves().length, 1);
   await assert.rejects(st.api.adjustStock({ product_id: 'piano', target_stock: -1 }), /entero/);
   assert.equal(st.stock('piano'), 9);
+});
+
+const receiptIssuer = { name: 'Vendedora de prueba', document: '12345', address: 'Dirección de prueba', phone: '3000000000', brand: 'Store de prueba' };
+const receiptSale = () => sale('installments', { customer_id: 'Cliente prueba', customer_phone: '3001234567', paid_cop: 50, balance_cop: 150, payments: [{ amount_cop: 50, date: '2026-10-24T12:00:00Z', method: 'cash', note: 'Nota privada del asesor' }], notes: 'No copiar nota interna', posted: true });
+const receiptSeed = () => ({ ...inventory, 'products/piano': { name: 'Piano de prueba', cost_cop: 70, margin_pct: 40 }, 'sales/old': receiptSale(), 'settings/receipts': { issuer: receiptIssuer, last_number: 8 } });
+const issueInput = row => ({ buyer: { name: 'Cliente prueba', document: '98765' }, by: 'admin@example.com', expectedSignature: receiptSaleSignature(row) });
+
+test('comprobante: consecutivo compartido, copia comercial sin costos y sin modificar stock/pagos', async () => {
+  const st = store(receiptSeed());
+  const { receipt } = await st.api.issueReceipt('old', issueInput(receiptSale()));
+  assert.equal(receipt.number, 'CV-000009');
+  assert.equal(st.read('settings/receipts').last_number, 9);
+  assert.equal(receipt.items[0].name, 'Piano de prueba');
+  assert.equal(receipt.paid_cop, 50);
+  assert.equal(receipt.balance_cop, 150);
+  assert.equal(st.stock('piano'), 10);
+  assert.equal(st.moves().length, 0);
+  assert.equal(st.read('sales/old').payments.length, 1);
+  const text = JSON.stringify(receipt);
+  assert.doesNotMatch(text, /cost_cop|margin_pct|Nota privada|nota interna/);
+  assert.match(receiptText(receipt), /No es factura electrónica/);
+});
+
+test('comprobante: repetir emisión recupera mismo número y no consume consecutivo', async () => {
+  const st = store(receiptSeed());
+  await st.api.issueReceipt('old', issueInput(receiptSale()));
+  const again = await st.api.issueReceipt('old', issueInput(receiptSale()));
+  assert.equal(again.receipt.number, 'CV-000009');
+  assert.equal(st.read('settings/receipts').last_number, 9);
+});
+
+test('comprobante: falta emisor o venta cambió y no se escribe nada', async () => {
+  const seed = receiptSeed(); delete seed['settings/receipts'];
+  const st = store(seed);
+  await assert.rejects(st.api.issueReceipt('old', issueInput(receiptSale())), /configurar/);
+  assert.equal(st.read('sales/old').receipt, undefined);
+  const configured = store(receiptSeed());
+  await assert.rejects(configured.api.issueReceipt('old', { ...issueInput(receiptSale()), expectedSignature: 'stale' }), /cambió/);
+  assert.equal(configured.read('settings/receipts').last_number, 8);
+});
+
+test('comprobante: rechaza propuesta, cancelada, total inconsistente y abonos desajustados', () => {
+  const args = { saleId: 'old', issuer: receiptIssuer, number: 'CV-1', buyer: { name: 'Cliente' } };
+  for (const status of ['pending', 'cancelled']) assert.throws(() => buildReceiptSnapshot({ ...args, sale: sale(status) }), /confirmadas/);
+  assert.throws(() => buildReceiptSnapshot({ ...args, sale: { ...receiptSale(), total_cop: 300 } }), /detalle no coincide/);
+  assert.throws(() => buildReceiptSnapshot({ ...args, sale: { ...receiptSale(), paid_cop: 70 } }), /pagos no coinciden/);
+});
+
+test('comprobante: cancelar anula sin borrar copia y bloquear eliminación conserva historial', async () => {
+  const st = store(receiptSeed());
+  const original = (await st.api.issueReceipt('old', issueInput(receiptSale()))).receipt;
+  await assert.rejects(st.api.deleteSale('old'), /comprobante/);
+  assert.equal(st.stock('piano'), 10);
+  await st.api.updateSaleStatus('old', 'cancelled', 'admin@example.com');
+  assert.equal(st.read('sales/old').receipt_void.reason, 'Venta cancelada');
+  assert.equal(JSON.stringify(st.read('sales/old').receipt), JSON.stringify(original));
+  assert.equal(st.stock('piano'), 12);
+  await st.api.updateSaleStatus('old', 'cancelled');
+  assert.equal(st.stock('piano'), 12);
+});
+
+test('comprobante: anulación manual no cambia venta, abonos o inventario', async () => {
+  const st = store(receiptSeed());
+  await st.api.issueReceipt('old', issueInput(receiptSale()));
+  await st.api.voidReceipt('old', 'Datos del cliente incorrectos', 'admin@example.com');
+  await st.api.voidReceipt('old', 'Segundo intento');
+  assert.equal(st.read('sales/old').receipt_void.reason, 'Datos del cliente incorrectos');
+  assert.equal(st.read('sales/old').status, 'installments');
+  assert.equal(st.read('sales/old').paid_cop, 50);
+  assert.equal(st.stock('piano'), 10);
+});
+
+test('comprobante: abonos posteriores no cambian la copia emitida', async () => {
+  const st = store(receiptSeed());
+  await st.api.issueReceipt('old', issueInput(receiptSale()));
+  await st.api.addPayment('old', 150);
+  assert.equal(st.read('sales/old').status, 'paid');
+  assert.equal(st.read('sales/old').receipt.paid_cop, 50);
+  assert.equal(st.read('sales/old').receipt.balance_cop, 150);
 });

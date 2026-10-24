@@ -23,6 +23,7 @@ import { State } from './state.js';
 import { STORE_CFG, ALLOWED_EMAILS } from './config.js';
 import { FirebaseAuth, getFirebaseStorage, initFirebase } from './firebase.js';
 import { Roles } from './roles.js';
+import { initReceipts } from './receipts-ui.js';
 import {
   DEFAULT_PRICING,
   normalizePricing,
@@ -461,6 +462,8 @@ export function boot() {
   /* =========================
      Utils
   ========================= */
+  const receiptsUI = initReceipts({ api: StoreAPI, roles: Roles, showTab, toast });
+
   const fmtCOP = (n) => {
     const v = Number.isFinite(n) ? n : 0;
     try {
@@ -914,7 +917,7 @@ export function boot() {
   /* =========================
      Tabs (tolerantes)
   ========================= */
-  const TAB_IDS = ['catalog', 'inventory', 'sales', 'leads', 'moves', 'dashboard', 'restock'];
+  const TAB_IDS = ['catalog', 'inventory', 'sales', 'receipts', 'leads', 'moves', 'dashboard', 'restock'];
 
   function tabSection_(name) {
     return $('tab-' + name);
@@ -962,6 +965,7 @@ export function boot() {
       ensureInventoryLoaded_(),
     ]).then(() => buildInventoryProductDatalist_()).catch(report).finally(after);
     else if (next === 'sales') Promise.all([ensureProductsLoaded_(), ensureOrdersLoaded_()]).catch(report).finally(() => { syncSalesUI_(); after(); });
+    else if (next === 'receipts') receiptsUI.load();
     else if (next === 'leads') Promise.all([
       ensureProductsLoaded_().catch(() => {}),
       ensureLeadsLoaded_().catch(() => {}),
@@ -1109,7 +1113,7 @@ export function boot() {
           ? `<button class="btn btn--tiny btn--primary" data-order-pay="${oid}">Marcar pagado</button>`
           : '');
       const detailBtn = isApi
-        ? `<button class="btn btn--tiny btn--ghost" data-order-detail="${oid}">✏️ Editar</button>` : '';
+        ? `<button class="btn btn--tiny btn--ghost" data-order-detail="${oid}">✏️ Editar</button>${['paid', 'installments', 'cancelled'].includes(status) ? `<button class="btn btn--tiny btn--ghost" type="button" data-receipt-sale="${oid}">Comprobante</button>` : ''}` : '';
       const cancelBtn = isApi && status !== 'cancelled' && (status === 'pending' || Roles.isAdmin())
         ? `<button type="button" class="btn btn--tiny btn--ghost" data-order-cancel="${oid}">Cancelar</button>` : '';
       const delBtn = !Roles.can('delete_sales') ? '' : isApi
@@ -1449,6 +1453,8 @@ export function boot() {
 
       await Promise.allSettled(tasks);
 
+      if (currentTab_() === 'receipts') await receiptsUI.load();
+
       if (!Object.keys(LOAD.errors).length && !State.get().ordersLoadError && !LEADS_LOAD.error) markSync_();
       renderActive_();
       setNet(navigator.onLine, navigator.onLine ? 'Conectado' : 'Sin conexión');
@@ -1479,6 +1485,7 @@ export function boot() {
       else if (tab === 'inventory') renderInventory_();
       else if (tab === 'dashboard') renderDashboard_();
       else if (tab === 'sales') { renderOrders_(); scheduleSaleRender_(); syncSalesUI_(); }
+      else if (tab === 'receipts') receiptsUI.render();
       else if (tab === 'leads') renderLeads_();
       else if (tab === 'moves') renderMoves_();
       else if (tab === 'restock') scheduleRestockRender_();
@@ -4909,6 +4916,7 @@ export function boot() {
         if (!user) {
           if (Roles.email()) {
             State.resetAll();
+            receiptsUI.reset();
             COSTS.map = new Map(); COSTS.loaded = false;
             PRICING.draft = null;
             PROFIT.data = null; PROFIT.loaded = false;

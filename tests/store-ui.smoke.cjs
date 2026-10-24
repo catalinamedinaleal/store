@@ -57,6 +57,7 @@ function fixtureData() {
       { id: 'p_piano', product_id: 'p_piano', cost_cop: 1000000, margin_pct: 45, competitor_price_cop: 1600000 },
       { id: 'p_brush', product_id: 'p_brush', cost_cop: 30000, margin_pct: 50 },
     ],
+    issuer: { name: 'Vendedora de prueba local', document: '123456789', address: 'Dirección ficticia 123', phone: '3000000000', brand: 'Musicala Store' },
     sales: [
       { id: 'sale_pending', customer_id: 'Laura Pérez', customer_phone: '3008887777', status: 'pending', total_cop: 1450000, paid_cop: 0, balance_cop: 1450000, posted: false, created_at: now.toISOString(), created_by: 'adminmusicala@gmail.com', notes: 'Quiere piano para su hija', items: [{ product_id: 'p_piano', qty: 1, unit_price: 1450000, subtotal: 1450000 }] },
       { id: 'sale_abono', customer_id: 'Carlos Ruiz', status: 'installments', total_cop: 350000, paid_cop: 100000, balance_cop: 250000, posted: true, created_at: now.toISOString(), created_by: 'adminmusicala@gmail.com', notes: 'Entrega por confirmar', items: [{ product_id: 'p_guitar', qty: 1, unit_price: 350000, subtotal: 350000 }], payments: [{ amount_cop: 100000, method: 'cash', note: 'Primer abono', date: now.toISOString() }] },
@@ -92,6 +93,7 @@ function firebaseMock(email) {
 
 function apiMock(data, role) {
   return `
+    import { buildReceiptSnapshot, receiptSaleSignature } from '/js/receipts.js';
     const data = ${JSON.stringify(data)};
     const calls = [];
     const copy = x => structuredClone(x);
@@ -107,6 +109,10 @@ function apiMock(data, role) {
     globalThis.__storeTestCalls = calls;
     const missing = name => { throw new Error('Unexpected mock operation: ' + name); };
     export const StoreAPI = {
+      getReceiptSettings: async () => ({ ok: true, issuer: copy(data.issuer) }),
+      saveReceiptIssuer: async issuer => { record('saveReceiptIssuer', issuer); data.issuer = copy(issuer); return { ok: true, issuer: copy(issuer) }; },
+      issueReceipt: async (id, input) => { record('issueReceipt', { id, input }); const sale = data.sales.find(s => s.id === id); if (!sale.receipt) sale.receipt = buildReceiptSnapshot({ sale, saleId: id, issuer: data.issuer, buyer: input.buyer, note: input.note, by: input.by, products: data.products, number: 'CV-000001' }); return { ok: true, receipt: copy(sale.receipt) }; },
+      voidReceipt: async (id, reason, by) => { record('voidReceipt', { id, reason, by }); data.sales.find(s => s.id === id).receipt_void = { reason, by, at: new Date().toISOString() }; return { ok: true }; },
       ping: async () => ({ ok: true }),
       listProducts: async () => ({ ok: true, items: copy(data.products) }),
       listInventory: async () => ({ ok: true, items: copy(data.inventory) }),
@@ -165,6 +171,10 @@ async function runRole(browser, base, role, mobile = false) {
   page.on('console', message => { if (/Content Security Policy|violates.*directive|Refused to/.test(message.text())) securityErrors.push(message.text()); });
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
+    const pdfLibrary = process.env.STORE_TEST_JSPDF;
+    if (url.href === 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js' && pdfLibrary) {
+      await route.fulfill({ contentType: 'text/javascript', body: fs.readFileSync(pdfLibrary, 'utf8') }); return;
+    }
     if (url.href === 'https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js') {
       await route.fulfill({ contentType: 'text/javascript', body: `
         export const ref = (_storage, path) => ({ path });
@@ -313,6 +323,67 @@ async function runRole(browser, base, role, mobile = false) {
     assert.match(upload.value.path, /^products\/.+\/\d+\.png$/);
     assert.equal(upload.value.type, 'image/png');
 
+    await page.locator('[data-tab="receipts"]').click();
+    await page.waitForFunction(() => document.querySelector('#receiptsBody')?.textContent.includes('Carlos Ruiz'));
+    assert.match(await page.locator('#receiptIssuerSummary').innerText(), /Vendedora de prueba local/);
+    assert.equal(await page.locator('#receiptIssuerForm').isVisible(), false, 'Configuration is collapsed by default');
+    await page.locator('#receiptsBody [data-receipt-sale="sale_abono"]').click();
+    await page.locator('#modalReceipt[open]').waitFor();
+    assert.match(await page.locator('#receiptPreview').innerText(), /250[.\s]?000/);
+    assert.doesNotMatch(await page.locator('#receiptPreview').innerText(), /cost_cop|margen|1[.\s]?000[.\s]?000/);
+    if (role === 'admin') {
+      await page.locator('#receiptBuyer_document').fill('9999999');
+      page.once('dialog', dialog => dialog.accept());
+      await page.locator('#btnIssueReceipt').click();
+      await page.waitForFunction(() => document.querySelector('#receiptPreview')?.textContent.includes('CV-000001'));
+      assert.equal(await page.locator('#btnIssueReceipt').isVisible(), false);
+      await page.locator('#btnReceiptCopy').click();
+      await page.waitForFunction(async () => (await navigator.clipboard.readText()).includes('COMPROBANTE COMERCIAL CV-000001'));
+      const receiptCopy = await page.evaluate(() => navigator.clipboard.readText());
+      assert.match(receiptCopy, /No es factura electrónica/);
+      assert.match(receiptCopy, /CC: 123456789/);
+      if (process.env.STORE_TEST_JSPDF) {
+        const receiptDownload = page.waitForEvent('download');
+        await page.locator('#btnReceiptPdf').click();
+        const pdf = await receiptDownload;
+        assert.equal(pdf.suggestedFilename(), 'CV-000001.pdf');
+        await pdf.saveAs(path.join(output, 'receipt-example.pdf'));
+        const multiPage = await page.evaluate(async () => {
+          const { createReceiptPdf } = await import('/js/receipts.js?v=' + window.__BUILD__);
+          const receipt = structuredClone(globalThis.__storeTestData.sales.find(s => s.id === 'sale_abono').receipt);
+          receipt.items = Array.from({ length: 80 }, (_, i) => ({ name: `Producto ${i + 1} de descripción larga para revisar los saltos de página del comprobante comercial`, qty: 1, unit_price: 10000, subtotal: 10000 }));
+          receipt.total_cop = 800000; receipt.paid_cop = 100000; receipt.balance_cop = 700000;
+          const pdf = createReceiptPdf(receipt, { jsPDF: window.jspdf.jsPDF, voidInfo: { reason: 'Prueba de documento anulado de varias páginas' } });
+          return { pages: pdf.getNumberOfPages(), bytes: Array.from(new Uint8Array(pdf.output('arraybuffer'))) };
+        });
+        assert.ok(multiPage.pages > 1, 'Long receipts paginate');
+        fs.writeFileSync(path.join(output, 'receipt-multipage.pdf'), Buffer.from(multiPage.bytes));
+      }
+      await page.screenshot({ path: path.join(output, 'admin-receipt.png') });
+      page.once('dialog', dialog => dialog.accept('Datos incorrectos - prueba local'));
+      await page.locator('#btnVoidReceipt').click();
+      await page.waitForFunction(() => document.querySelector('#receiptPreview')?.textContent.includes('ANULADO'));
+      assert.equal(await page.evaluate(() => globalThis.__storeTestCalls.filter(c => c.name === 'issueReceipt').length), 1);
+      assert.equal(await page.evaluate(() => globalThis.__storeTestData.sales.find(s => s.id === 'sale_abono').status), 'installments');
+    } else {
+      assert.equal(await page.locator('#btnIssueReceipt').isVisible(), false);
+      assert.equal(await page.locator('#btnReceiptPdf').isDisabled(), true);
+      await page.evaluate(async () => {
+        const api = await import('/js/firebase-store.js?v=' + window.__BUILD__);
+        await api.StoreAPI.issueReceipt('sale_abono', { buyer: { name: 'Carlos Ruiz' }, by: 'admin-test' });
+      });
+      await page.locator('[data-close-dialog="modalReceipt"]').click();
+      await page.locator('#btnRefreshReceipts').click();
+      await page.waitForFunction(() => document.querySelector('#receiptsBody')?.textContent.includes('CV-000001'));
+      await page.locator('#receiptsBody [data-receipt-sale="sale_abono"]').click();
+      await page.waitForFunction(() => document.querySelector('#receiptPreview')?.textContent.includes('CV-000001'));
+      assert.equal(await page.locator('#btnIssueReceipt').isVisible(), false);
+      assert.equal(await page.locator('#btnVoidReceipt').isVisible(), false);
+      assert.equal(await page.locator('#btnReceiptPdf').isDisabled(), false);
+      await page.screenshot({ path: path.join(output, 'asesor-mobile-receipt.png') });
+    }
+    await page.locator('[data-close-dialog="modalReceipt"]').click();
+
     if (role === 'asesor') {
       assert.equal(await page.locator('[data-tab="dashboard"]').isVisible(), false);
       const calls = await page.evaluate(() => globalThis.__storeTestCalls.filter(c => c.name === 'listProductCosts'));
@@ -321,7 +392,7 @@ async function runRole(browser, base, role, mobile = false) {
     assert.deepEqual(errors, [], `${role}: browser exceptions`);
     assert.deepEqual(securityErrors, [], `${role}: CSP violations`);
     assert.ok(!blockedRequests.some(url => /firestore|identitytoolkit|firebasestorage/.test(url)), 'UI must not attempt a real Firebase request');
-    console.log(`PASS ${role}${mobile ? ' mobile' : ''}: stock, search, filters, photo upload/copy/download/preview/share payload, product-to-lead/cart, same-ID pending update, phone persistence, proposal not won, receivables and due leads`);
+    console.log(`PASS ${role}${mobile ? ' mobile' : ''}: catalog, photos, sales, leads, receipts, role controls, receipt copy/download and annulment`);
   } catch (error) {
     await page.screenshot({ path: path.join(output, `${role}${mobile ? '-mobile' : ''}-failure.png`), fullPage: true }).catch(() => {});
     console.error(JSON.stringify({ role, mobile, errors, securityErrors, blockedRequests }, null, 2));

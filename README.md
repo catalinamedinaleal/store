@@ -34,6 +34,45 @@ por estado, abrir el producto relacionado, preparar contacto por WhatsApp y
 registrar seguimientos. Los enlaces de WhatsApp abren la conversación; el equipo
 decide cuándo enviar el mensaje.
 
+## Comprobantes comerciales
+
+La pestaña **Comprobantes** lista las últimas 500 ventas confirmadas y los
+documentos emitidos, con búsqueda y filtros. También se abre desde **Ventas →
+Comprobante**. No es un módulo de facturación electrónica, no se conecta con la
+DIAN y no decide la condición tributaria de la vendedora. La condición de persona
+natural por sí sola no acredita una excepción a la obligación de facturar.
+
+- La vendedora se configura en `settings/receipts`, solo legible por el equipo y
+  editable por admin según las reglas actuales. No se incluyen sus datos
+  personales en el código público. Musicala Store figura como referencia comercial,
+  no como coemisor ni alianza jurídica certificada. No se infieren NIT, IVA o RUT.
+- Solo admin emite y anula desde la interfaz. El consecutivo interno `CV-000001`
+  se incrementa en una transacción junto con la copia en `sales/{id}.receipt`.
+  Escribir el consecutivo exige permiso de admin en `settings`; los asesores
+  pueden consultar, copiar y descargar documentos ya emitidos.
+- Se verifica en servidor la venta antes de abrir, copiar o descargar; la emisión
+  rechaza cambios desde la revisión. Emitir no agrega pagos ni descuenta stock.
+  Reintentar recupera la copia existente sin consumir otro número.
+- La copia contiene emisor, cliente, identificación opcional del cliente,
+  productos, total, pagos/saldo al emitir, observación comercial y aviso no fiscal.
+  No copia costos, márgenes ni notas internas. Pagos posteriores no actualizan
+  esta copia; no constituye un recibo de esos pagos posteriores.
+- Cancelar la venta anula su comprobante. Anular únicamente el comprobante no
+  cancela la venta ni devuelve dinero o stock. Una venta con comprobante no se
+  elimina desde la app, para conservar historial; un número anulado no se reutiliza.
+  No se implementó reexpedición ni emisión de recibos individuales por abono.
+- Estas protecciones son del flujo de la app; las reglas preexistentes de
+  `sales` siguen permitiendo escritura al equipo. No son un archivo fiscal
+  inalterable ni se modificaron permisos de Firebase en esta implementación.
+
+Fuentes de orientación: [obligación de facturar (DIAN)](https://www.dian.gov.co/impuestos/sociedades/Paginas/obligadosfacturar.aspx)
+y [documento soporte a cargo del comprador cuando corresponda (DIAN)](https://micrositios.dian.gov.co/sistema-de-facturacion-electronica/documento-soporte-adquisiciones-no-obligados/).
+La confirmación tributaria específica debe venir del responsable y su contador.
+
+El PDF usa el jsPDF que ya carga el sitio. Para probar su descarga real y generar
+ejemplos largos en la prueba local, se puede definir `STORE_TEST_JSPDF` con la ruta
+de `jspdf.umd.min.js` versión 2.5.1. Esa dependencia no contiene datos del negocio.
+
 ## Inventario y pagos
 
 - Un pedido **pendiente** no descuenta ni reserva stock. Al reabrirlo y guardarlo

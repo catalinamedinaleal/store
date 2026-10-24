@@ -59,7 +59,7 @@
 
   <!-- Build / Cache bust -->
   <script>
-    window.__BUILD__ = "2026-10-17.1";
+    window.__BUILD__ = "2026-10-24.1";
   </script>
 
   <!--
@@ -74,7 +74,7 @@
       var v = encodeURIComponent(window.__BUILD__ || "");
       if (!v || !HTMLScriptElement.supports || !HTMLScriptElement.supports("importmap")) return;
 
-      var mods = ["config.js", "roles.js", "pricing.js", "state.js", "firebase.js", "firebase-store.js", "main.js"];
+      var mods = ["config.js", "roles.js", "pricing.js", "state.js", "firebase.js", "firebase-store.js", "main.js", "receipts.js", "receipts-ui.js"];
       var imports = {};
 
       for (var i = 0; i < mods.length; i++) {
@@ -352,6 +352,7 @@
         <button class="tab is-active" data-tab="catalog" type="button" aria-selected="true">Catálogo</button>
         <button class="tab" data-tab="inventory" type="button" aria-selected="false">Inventario</button>
         <button class="tab" data-tab="sales" type="button" aria-selected="false">Ventas</button>
+        <button class="tab" data-tab="receipts" type="button" aria-selected="false">Comprobantes</button>
         <button class="tab" data-tab="leads" type="button" aria-selected="false">
           Interesados <span class="restockBadge" id="leadsBadge" hidden>0</span>
         </button>
@@ -745,6 +746,34 @@
         <div class="tiny muted" style="padding:12px 14px;">
           Tip: puedes buscar por nombre/ID, referencia (FAC-123) o el id de la venta.
         </div>
+      </section>
+
+      <!-- TAB: Comprobantes comerciales, no facturación fiscal -->
+      <section class="card tabview" id="tab-receipts" hidden>
+        <div class="card__head"><div><h2 class="h2">Comprobantes</h2><p class="tiny muted">Documentos comerciales de ventas confirmadas, expedidos por la vendedora persona natural.</p></div><button class="btn btn--ghost" id="btnRefreshReceipts" type="button">Actualizar</button></div>
+        <div class="receiptsIntro">
+          <p class="syncNotice" id="receiptLegalNotice"></p>
+          <p class="tiny">Ser persona natural no determina por sí solo si se debe facturar. Confirma las responsabilidades de la vendedora con su RUT y contador. Esta sección no se conecta con la DIAN.</p>
+          <p class="tiny">Musicala Store figura como referencia comercial; la vendedora es quien aparece como emisor. No se afirma una alianza jurídica ni que Musicala sea coemisor.</p>
+          <p><a href="https://www.dian.gov.co/impuestos/sociedades/Paginas/obligadosfacturar.aspx" target="_blank" rel="noopener noreferrer">Consultar orientación DIAN sobre obligación de facturar ↗</a></p>
+          <p class="tiny" id="receiptIssuerSummary"></p>
+          <details><summary>Configuración de la vendedora · Solo administrador</summary>
+            <form id="receiptIssuerForm" hidden>
+              <div class="grid2">
+                <label class="field"><span class="label">Nombre completo</span><input class="input" id="issuer_name" required maxlength="180" autocomplete="off"></label>
+                <label class="field"><span class="label">Cédula de ciudadanía</span><input class="input" id="issuer_document" required maxlength="40" autocomplete="off"></label>
+                <label class="field"><span class="label">Dirección</span><input class="input" id="issuer_address" required maxlength="220" autocomplete="off"></label>
+                <label class="field"><span class="label">Teléfono</span><input class="input" id="issuer_phone" type="tel" required maxlength="40" autocomplete="off"></label>
+                <label class="field"><span class="label">Referencia comercial (no coemisor)</span><input class="input" id="issuer_brand" maxlength="80" value="Musicala Store"></label>
+              </div><p class="tiny muted">Estos datos se guardan en Firebase, accesibles solo al equipo autorizado. Las copias ya emitidas no cambian.</p>
+              <button class="btn btn--primary" id="btnSaveIssuer" type="submit">Guardar y verificar emisor</button>
+            </form>
+          </details>
+          <p class="tiny muted">Solo un administrador emite o anula. Los asesores pueden consultar y descargar. La numeración CV es interna, no una autorización DIAN.</p>
+          <p id="receiptsStatus" class="tiny muted" role="status"></p>
+        </div>
+        <div class="filterBar"><input class="input" id="receiptsSearch" type="search" placeholder="Buscar cliente, número o venta" aria-label="Buscar comprobantes"><select class="input" id="receiptsFilter" aria-label="Estado de comprobantes"><option value="all">Todos</option><option value="unissued">Por emitir</option><option value="issued">Emitidos</option><option value="void">Anulados</option></select></div>
+        <div class="tablewrap"><table class="table"><thead><tr><th>Comprobante / venta</th><th>Cliente</th><th>Total venta</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="receiptsBody"></tbody></table></div>
       </section>
 
       <!-- TAB: Dashboard -->
@@ -1474,6 +1503,23 @@
         <button class="btn btn--ghost" type="button" data-close-dialog="modalSaleDetail">Cancelar</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="modal" id="modalReceipt" aria-label="Comprobante comercial">
+    <div class="modal__card">
+      <div class="modal__head"><div><h3 class="h3">Comprobante comercial</h3><p class="tiny muted" id="receiptModalStatus"></p></div><button class="btn btn--ghost" type="button" data-close-dialog="modalReceipt">Cerrar</button></div>
+      <form id="receiptBuyerFields" onsubmit="return false">
+        <div class="grid2">
+          <label class="field"><span class="label">Nombre del cliente o consumidor final</span><input class="input" id="receiptBuyer_name" required maxlength="180"></label>
+          <label class="field"><span class="label">Identificación del cliente · opcional</span><input class="input" id="receiptBuyer_document" maxlength="60"></label>
+          <label class="field"><span class="label">Teléfono · opcional</span><input class="input" id="receiptBuyer_phone" type="tel" maxlength="40"></label>
+          <label class="field"><span class="label">Dirección · opcional</span><input class="input" id="receiptBuyer_address" maxlength="220"></label>
+        </div>
+        <label class="field"><span class="label">Observación para el cliente · opcional</span><textarea class="input" id="receiptNote" maxlength="600" rows="2" placeholder="No se copian las notas internas de la venta."></textarea></label>
+      </form>
+      <article class="receiptPaper" id="receiptPreview" aria-live="polite"></article>
+      <div class="modal__foot"><button class="btn btn--ghost" id="btnReceiptCopy" type="button" disabled>Copiar comprobante</button><button class="btn btn--primary" id="btnReceiptPdf" type="button" disabled>Descargar PDF</button><button class="btn btn--primary" id="btnIssueReceipt" type="button" hidden>Emitir y guardar</button><button class="btn btn--ghost" id="btnVoidReceipt" type="button" hidden>Anular comprobante</button></div>
+    </div>
   </dialog>
 
   <!-- Cache-bust del JS igual que styles.css: siempre carga la versión del build -->
